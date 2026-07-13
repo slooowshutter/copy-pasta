@@ -26,6 +26,7 @@ struct DrawerView: View {
     unowned let ctrl: PanelController
 
     @FocusState private var searchFocused: Bool
+    @FocusState private var editorFocused: Bool
     @State private var scrolledID: Int64?
 
     var body: some View {
@@ -48,6 +49,8 @@ struct DrawerView: View {
                     .padding(.bottom, 8)
             }
             .padding(.top, 12)
+
+            if state.editingItem != nil { editorOverlay }
         }
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(
@@ -55,12 +58,53 @@ struct DrawerView: View {
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         )
         .ignoresSafeArea()
+        .animation(.easeOut(duration: 0.15), value: state.editingItem)
+    }
+
+    // MARK: - Inline text editor (⌘E)
+
+    private var editorOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.55)   // blocks the cards behind; Cancel/Save/esc to dismiss
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { ctrl.cancelEdit() }
+                        .keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button("Save") { ctrl.saveEdit() }
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .buttonStyle(.borderedProminent)
+                }
+                .controlSize(.large)
+                .padding(12)
+
+                TextEditor(text: $state.editText)
+                    .font(.system(size: 14))
+                    .scrollContentBackground(.hidden)
+                    .focused($editorFocused)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.06)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.10)))
+                    .padding(.horizontal, 12)
+
+                Text("\(state.editText.count) characters")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+            .frame(width: 480, height: 300)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color(white: 0.13)))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12)))
+            .shadow(radius: 30)
+            .onAppear { DispatchQueue.main.async { editorFocused = true } }
+        }
     }
 
     private var hintText: String {
         let n = state.selectedIndices.count
         if n > 1 { return "\(n) selected   ⇧← → adjust   ⏎ copy all   ⌘⌫ delete   esc" }
-        return "← → navigate   ⇧← → multiselect   ⌘← ⌘→ boards   ⏎ copy   esc close"
+        return "← → navigate   ⇧← → multiselect   ⌘← ⌘→ boards   ⏎ copy   ⌘E edit   esc close"
     }
 
     private var emptyMessage: String {
@@ -91,7 +135,38 @@ struct DrawerView: View {
         }
         .frame(height: 40)
         .padding(.horizontal, 12)
+        // Pinned top-right without disturbing the centered cluster.
+        .overlay(alignment: .trailing) {
+            if !state.searchOpen { ellipsisMenu.padding(.trailing, 12) }
+        }
         .onChange(of: state.searchOpen) { searchFocused = state.searchOpen }
+    }
+
+    private var ellipsisMenu: some View {
+        Menu {
+            Menu(state.isPaused ? "Paused" : "Pause Paste") {
+                Button("Pause for 15 minutes") { ctrl.pause(for: 15 * 60) }
+                Button("Pause for 30 minutes") { ctrl.pause(for: 30 * 60) }
+                Button("Pause for 1 hour")     { ctrl.pause(for: 60 * 60) }
+                Button("Pause for 3 hours")    { ctrl.pause(for: 3 * 60 * 60) }
+                Button("Pause for 8 hours")    { ctrl.pause(for: 8 * 60 * 60) }
+                Divider()
+                Button(state.isPaused ? "Resume Paste" : "Pause Paste") { ctrl.togglePause() }
+            }
+            Divider()
+            Button("Settings…") { ctrl.openSettings() }
+            Divider()
+            Button("Quit Pastey") { NSApp.terminate(nil) }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     private var searchField: some View {
