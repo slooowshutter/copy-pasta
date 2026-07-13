@@ -1,6 +1,4 @@
-# Pastey
-
-A clipboard history manager for macOS — a [Paste.app](https://pasteapp.io) clone. Lives in the menu bar, remembers everything you copy, and brings it back with a keystroke.
+A clipboard history manager for macOS — a [Paste.app](https://pasteapp.io) clone opensource. Lives in the menu bar, remembers everything you copy, and brings it back with a keystroke.
 
 - **Clipboard history** — every text/link you copy, searchable
 - **Boards** — organize snippets into pinboards (Prompts, Code, Useful Links, …)
