@@ -10,6 +10,9 @@ final class DrawerState: ObservableObject {
     @Published var boards: [Board] = []
     @Published var currentBoardID: Int64?
     @Published var searchOpen = false
+    @Published var isPaused = false
+    @Published var editingItem: ClipItem?     // non-nil while the text editor is open
+    @Published var editText = ""
 
     private var all: [ClipItem] = []
     private var anchor = 0                  // fixed end of a shift-extended range
@@ -107,6 +110,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard !isVisible else { return }
         state.query = ""
         state.searchOpen = false
+        state.editingItem = nil
         state.reload()
         state.shownTick += 1
 
@@ -133,6 +137,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     func hide() {
         removeKeyMonitor()
+        state.editingItem = nil     // discard any in-progress edit
         panel.orderOut(nil)
     }
 
@@ -190,6 +195,9 @@ final class PanelController: NSObject, NSWindowDelegate {
             return nil
         case 51 where cmd: // cmd+delete — delete the whole selection
             deleteSelection()
+            return nil
+        case 14 where cmd: // cmd+E — edit the selected item's text
+            beginEditing()
             return nil
         default:
             return event
@@ -302,5 +310,55 @@ final class PanelController: NSObject, NSWindowDelegate {
         DB.shared.delete(item)
         state.reload()
         state.selectSingle(min(index, state.lastIndex))
+    }
+
+    // MARK: - Ellipsis menu (routed to AppDelegate, which owns watcher/status/window)
+
+    func openSettings() {
+        (NSApp.delegate as? AppDelegate)?.openSettings()
+        hide()
+    }
+
+    func pause(for interval: TimeInterval) {
+        (NSApp.delegate as? AppDelegate)?.pause(for: interval)
+        hide()
+    }
+
+    func togglePause() {
+        (NSApp.delegate as? AppDelegate)?.togglePause()
+    }
+
+    // MARK: - Inline text editing (⌘E)
+
+    /// Open the plain-text editor for the selected text/link item. Suspends the
+    /// card-nav key monitor so typing (arrows, return, esc) reaches the editor.
+    func beginEditing() {
+        guard state.items.indices.contains(state.selection) else { return }
+        let item = state.items[state.selection]
+        guard item.kind == .text || item.kind == .link, let text = item.plainText else {
+            NSSound.beep()   // images/files have no editable text
+            return
+        }
+        state.editText = text
+        state.editingItem = item
+        removeKeyMonitor()
+    }
+
+    func saveEdit() {
+        guard let item = state.editingItem else { return }
+        let idx = state.selection            // reload resets selection; remember it
+        DB.shared.updateText(item.id, to: state.editText)
+        endEditing()
+        state.reload()
+        state.selectSingle(min(idx, state.lastIndex))
+    }
+
+    func cancelEdit() {
+        endEditing()
+    }
+
+    private func endEditing() {
+        state.editingItem = nil
+        if isVisible { addKeyMonitor() }     // restore card navigation
     }
 }

@@ -1,9 +1,10 @@
 import AppKit
+import SwiftUI
 import Carbon.HIToolbox
 
 // Dev helpers: `Pastey --toggle` opens/closes the running instance's drawer,
 // `Pastey --snapshot` writes its rendered view to /tmp/pastey-panel.png.
-for (arg, name) in [("--toggle", "toggle"), ("--snapshot", "snapshot")]
+for (arg, name) in [("--toggle", "toggle"), ("--snapshot", "snapshot"), ("--settings", "settings")]
 where CommandLine.arguments.contains(arg) {
     // `--snapshot --board Prompts` snapshots that tab.
     var info: [String: String] = [:]
@@ -12,6 +13,7 @@ where CommandLine.arguments.contains(arg) {
         info["board"] = CommandLine.arguments[i + 1]
     }
     if CommandLine.arguments.contains("--search") { info["search"] = "1" }
+    if CommandLine.arguments.contains("--edit") { info["edit"] = "1" }
     if let i = CommandLine.arguments.firstIndex(of: "--select"),
        i + 1 < CommandLine.arguments.count {
         info["select"] = CommandLine.arguments[i + 1]
@@ -26,14 +28,22 @@ where CommandLine.arguments.contains(arg) {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let watcher = ClipboardWatcher()
     var panelController: PanelController!
-    var statusItem: NSStatusItem!
+    var statusItem: NSStatusItem?
     var hotKey: HotKey?
-    var pauseItem: NSMenuItem!
+    var pauseItem: NSMenuItem?
+    var showItem: NSMenuItem?
+    var settingsWindow: NSWindow?
+    var pauseTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = DB.shared // open + migrate up-front, not lazily mid-use
         DB.shared.regenerateThumbnailsIfNeeded()
         panelController = PanelController()
+
+        let settings = AppSettings.shared
+        settings.onMenuBarChange = { [weak self] visible in self?.setMenuBarVisible(visible) }
+        settings.onShortcutChange = { [weak self] in self?.applyShortcut() }
+        DB.shared.pruneHistory(olderThan: settings.keepHistory.seconds) // enforce retention at launch
 
         watcher.onCapture = { [weak self] in
             guard let self, self.panelController.isVisible else { return }
@@ -41,8 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         watcher.start()
 
-        // ⌘⌥⇧V while testing — real Paste owns ⌘⇧V; reclaim it when Pastey replaces Paste.
-        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(cmdKey | optionKey | shiftKey)) { [weak self] in
+        // Default ⇧⌘V; user-rebindable in Settings › Shortcuts.
+        hotKey = HotKey(keyCode: settings.shortcutKeyCode, modifiers: settings.shortcutModifiers) { [weak self] in
             self?.panelController.toggle()
         }
 
@@ -70,15 +80,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.panelController.state.selection = n - 1
                 self?.panelController.state.selectedIndices = Set(0..<n)
             }
+            if note.userInfo?["edit"] as? String == "1" {
+                self?.panelController.beginEditing()
+            }
         }
 
-        setupStatusItem()
+        // Dev loop: `Pastey --settings` opens Settings and renders it to
+        // /tmp/pastey-settings.png (same no-permission cacheDisplay trick as --snapshot).
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.marclamy.pastey.settings"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.openSettings()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                guard let view = self?.settingsWindow?.contentView,
+                      let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: "/tmp/pastey-settings.png"))
+            }
+        }
+
+        if settings.showInMenuBar { setupStatusItem() }
     }
 
     private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(
-            systemSymbolName: "clipboard.fill",
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(
+            systemSymbolName: watcher.isPaused ? "clipboard" : "clipboard.fill",
             accessibilityDescription: "Pastey"
         )
 
@@ -86,15 +115,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Title shows the shortcut as text only — the global hotkey is registered
         // once via Carbon (HotKey). Binding it here too would double-fire toggle().
-        let show = NSMenuItem(title: "Show Pastey  ⌥⇧⌘V", action: #selector(toggleDrawer), keyEquivalent: "")
+        let show = NSMenuItem(title: "Show Pastey  \(AppSettings.shared.shortcutGlyphs)", action: #selector(toggleDrawer), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
+        showItem = show
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(menuOpenSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         menu.addItem(.separator())
 
-        pauseItem = NSMenuItem(title: "Pause Watching", action: #selector(togglePause), keyEquivalent: "")
-        pauseItem.target = self
-        menu.addItem(pauseItem)
+        let pause = NSMenuItem(title: watcher.isPaused ? "Resume Watching" : "Pause Watching", action: #selector(togglePause), keyEquivalent: "")
+        pause.target = self
+        menu.addItem(pause)
+        pauseItem = pause
 
         let clear = NSMenuItem(title: "Clear History…", action: #selector(clearHistory), keyEquivalent: "")
         clear.target = self
@@ -105,20 +140,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quit = NSMenuItem(title: "Quit Pastey", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
 
-        statusItem.menu = menu
+        item.menu = menu
+        statusItem = item
     }
 
     @objc private func toggleDrawer() {
         panelController.toggle()
     }
 
-    @objc private func togglePause() {
-        watcher.isPaused.toggle()
-        pauseItem.title = watcher.isPaused ? "Resume Watching" : "Pause Watching"
-        statusItem.button?.image = NSImage(
-            systemSymbolName: watcher.isPaused ? "clipboard" : "clipboard.fill",
+    @objc func togglePause() {
+        setPaused(!watcher.isPaused)
+    }
+
+    /// Pause capture, then auto-resume after `interval`.
+    func pause(for interval: TimeInterval) {
+        setPaused(true)
+        pauseTimer?.invalidate()
+        pauseTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            self?.setPaused(false)
+        }
+    }
+
+    /// Single source of truth for pause state — keeps the watcher, the drawer's
+    /// menu label, and the status icon in sync.
+    private func setPaused(_ paused: Bool) {
+        watcher.isPaused = paused
+        panelController?.state.isPaused = paused
+        pauseItem?.title = paused ? "Resume Watching" : "Pause Watching"
+        statusItem?.button?.image = NSImage(
+            systemSymbolName: paused ? "clipboard" : "clipboard.fill",
             accessibilityDescription: "Pastey"
         )
+        if !paused { pauseTimer?.invalidate(); pauseTimer = nil }
+    }
+
+    func setMenuBarVisible(_ visible: Bool) {
+        if visible {
+            if statusItem == nil { setupStatusItem() }
+        } else if let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItem = nil
+            pauseItem = nil
+            showItem = nil
+        }
+    }
+
+    func applyShortcut() {
+        let s = AppSettings.shared
+        hotKey?.update(keyCode: s.shortcutKeyCode, modifiers: s.shortcutModifiers)
+        showItem?.title = "Show Pastey  \(s.shortcutGlyphs)"
+    }
+
+    @objc private func menuOpenSettings() { openSettings() }
+
+    func openSettings() {
+        if settingsWindow == nil {
+            let w = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 760, height: 580),
+                styleMask: [.titled, .closable, .miniaturizable],
+                backing: .buffered, defer: false
+            )
+            w.title = "Pastey Settings"
+            w.isReleasedWhenClosed = false
+            w.appearance = NSAppearance(named: .darkAqua) // match the dark drawer
+            w.center()
+            w.contentView = NSHostingView(rootView: SettingsView())
+            settingsWindow = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        settingsWindow?.orderFrontRegardless() // accessory apps won't front reliably otherwise
     }
 
     @objc private func clearHistory() {

@@ -166,6 +166,35 @@ final class DB {
         sqlite3_step(stmt)
     }
 
+    /// Replace an item's text (plain only — drops any rtf/html richness). Recomputes
+    /// the content hash so future dedup matches the new text; if that new hash would
+    /// collide with another item (content_hash is UNIQUE), keeps the old hash so the
+    /// edit still saves.
+    func updateText(_ id: Int64, to text: String) {
+        if !writeText(id, text: text, hash: sha256(Data(text.utf8))) {
+            writeText(id, text: text, hash: nil)
+        }
+    }
+
+    @discardableResult
+    private func writeText(_ id: Int64, text: String, hash: String?) -> Bool {
+        let sql = hash == nil
+            ? "UPDATE items SET plain_text = ?, char_count = ?, rtf = NULL, html = NULL WHERE id = ?"
+            : "UPDATE items SET plain_text = ?, char_count = ?, rtf = NULL, html = NULL, content_hash = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+        defer { sqlite3_finalize(stmt) }
+        bind(stmt, 1, text)
+        sqlite3_bind_int64(stmt, 2, Int64(text.count))
+        if let hash {
+            bind(stmt, 3, hash)
+            sqlite3_bind_int64(stmt, 4, id)
+        } else {
+            sqlite3_bind_int64(stmt, 3, id)
+        }
+        return sqlite3_step(stmt) == SQLITE_DONE
+    }
+
     /// boardID nil = the rolling clipboard history; otherwise items pinned to that board.
     func recent(boardID: Int64? = nil, limit: Int = 200) -> [ClipItem] {
         let sql = """
@@ -227,6 +256,27 @@ final class DB {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         sqlite3_bind_int64(stmt, 1, Int64(max))
+        var ids: [Int64] = []
+        var paths: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            ids.append(sqlite3_column_int64(stmt, 0))
+            if let path = columnText(stmt, 1) { paths.append(path) }
+        }
+        sqlite3_finalize(stmt)
+        guard !ids.isEmpty else { return }
+        exec("DELETE FROM items WHERE id IN (\(ids.map(String.init).joined(separator: ",")))")
+        paths.forEach(removeImageIfOrphan)
+    }
+
+    /// Delete history items older than `interval` seconds; boards exempt.
+    /// `interval == .infinity` (Keep History = Forever) is a no-op.
+    func pruneHistory(olderThan interval: TimeInterval) {
+        guard interval.isFinite else { return }
+        let cutoff = Date().timeIntervalSince1970 - interval
+        let sql = "SELECT id, image_path FROM items WHERE board_id IS NULL AND created_at < ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_bind_double(stmt, 1, cutoff)
         var ids: [Int64] = []
         var paths: [String] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

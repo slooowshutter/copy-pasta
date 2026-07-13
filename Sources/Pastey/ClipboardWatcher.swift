@@ -35,6 +35,8 @@ final class ClipboardWatcher {
         capture.sourceAppName = app?.localizedName
         DB.shared.upsert(capture)
         DB.shared.trim()
+        DB.shared.pruneHistory(olderThan: AppSettings.shared.keepHistory.seconds)
+        if AppSettings.shared.soundEffects { NSSound(named: "Pop")?.play() }
         onCapture?()
     }
 
