@@ -24,14 +24,32 @@ extension Board {
 struct DrawerView: View {
     @ObservedObject var state: DrawerState
     unowned let ctrl: PanelController
+    @ObservedObject private var settings = AppSettings.shared
 
     @FocusState private var searchFocused: Bool
     @FocusState private var editorFocused: Bool
     @State private var scrolledID: Int64?
 
+    // Panel background: Liquid Glass when the setting is on and the OS + SDK support it,
+    // otherwise the classic HUD material. The compiler guard lets this file build on the
+    // pre-26 SDK too (glassEffect only exists in the macOS 26 SDK).
+    @ViewBuilder private var panelBackground: some View {
+        #if compiler(>=6.2)
+        if settings.glassStyle != .off, #available(macOS 26, *) {
+            // .clear = more see-through / liquid; .regular = frostier, more opaque.
+            Color.clear.glassEffect(settings.glassStyle == .clear ? Glass.clear : Glass.regular,
+                                    in: RoundedRectangle(cornerRadius: 18))
+        } else {
+            VisualEffect()
+        }
+        #else
+        VisualEffect()
+        #endif
+    }
+
     var body: some View {
         ZStack {
-            VisualEffect()
+            panelBackground
             VStack(spacing: 10) {
                 topBar
                 if state.items.isEmpty {

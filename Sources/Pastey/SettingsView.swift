@@ -114,6 +114,15 @@ private struct GeneralPane: View {
                 SettingRow(title: "Sound effects") {
                     Toggle("", isOn: $settings.soundEffects).labelsHidden().toggleStyle(.switch)
                 }
+                RowDivider()
+                SettingRow(title: "Liquid Glass") {
+                    Picker("", selection: $settings.glassStyle) {
+                        ForEach(GlassStyle.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                }
             }
 
             VStack(alignment: .leading, spacing: 12) {

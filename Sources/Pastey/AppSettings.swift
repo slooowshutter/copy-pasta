@@ -27,6 +27,20 @@ enum KeepHistory: Int, CaseIterable {
     }
 }
 
+/// Panel background material. `off` = classic HUD material (works on any macOS);
+/// `clear`/`frosted` are Liquid Glass (macOS 26+) — clear is more see-through, frosted more opaque.
+enum GlassStyle: Int, CaseIterable {
+    case off, clear, frosted
+
+    var label: String {
+        switch self {
+        case .off:     return "Off"
+        case .clear:   return "Clear"
+        case .frosted: return "Frosted"
+        }
+    }
+}
+
 /// The app's one preferences store — UserDefaults-backed, observable for SwiftUI.
 /// Side effects live in the `didSet`s (login item, DB prune) or fire the callback
 /// seams (`onMenuBarChange`/`onShortcutChange`) that AppDelegate wires at launch,
@@ -46,6 +60,7 @@ final class AppSettings: ObservableObject {
         if showInMenuBar != oldValue { onMenuBarChange?(showInMenuBar) }
     } }
     @Published var soundEffects: Bool { didSet { d.set(soundEffects, forKey: Keys.sound) } }
+    @Published var glassStyle: GlassStyle { didSet { d.set(glassStyle.rawValue, forKey: Keys.glassStyle) } }
     @Published var keepHistory: KeepHistory { didSet {
         d.set(keepHistory.rawValue, forKey: Keys.keepHistory)
         if keepHistory != oldValue { DB.shared.pruneHistory(olderThan: keepHistory.seconds) }
@@ -66,6 +81,7 @@ final class AppSettings: ObservableObject {
     private enum Keys {
         static let menuBar = "showInMenuBar"
         static let sound = "soundEffects"
+        static let glassStyle = "glassStyle"
         static let keepHistory = "keepHistory"
         static let keyCode = "shortcutKeyCode"
         static let modifiers = "shortcutModifiers"
@@ -76,6 +92,7 @@ final class AppSettings: ObservableObject {
         d.register(defaults: [
             Keys.menuBar: true,
             Keys.sound: false,
+            Keys.glassStyle: GlassStyle.off.rawValue,
             Keys.keepHistory: KeepHistory.month.rawValue,
             Keys.keyCode: Int(Self.defaultKeyCode),
             Keys.modifiers: Int(Self.defaultModifiers),
@@ -85,6 +102,7 @@ final class AppSettings: ObservableObject {
         openAtLogin = (SMAppService.mainApp.status == .enabled)
         showInMenuBar = d.bool(forKey: Keys.menuBar)
         soundEffects = d.bool(forKey: Keys.sound)
+        glassStyle = GlassStyle(rawValue: d.integer(forKey: Keys.glassStyle)) ?? .off
         keepHistory = KeepHistory(rawValue: d.integer(forKey: Keys.keepHistory)) ?? .month
         shortcutKeyCode = UInt32(d.integer(forKey: Keys.keyCode))
         shortcutModifiers = UInt32(d.integer(forKey: Keys.modifiers))
