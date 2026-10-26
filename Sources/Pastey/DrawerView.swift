@@ -18,7 +18,22 @@ extension Board {
         "#FFC53D", "#FF8A3D", "#FF5D5D", "#FF6BB5",
         "#9B6BFF", "#4D8DFF", "#2FBFAF", "#3DBF6B",
     ]
+    static let presetColorNames = [
+        "Yellow", "Orange", "Red", "Pink",
+        "Purple", "Blue", "Teal", "Green",
+    ]
     var color: Color { Color(hex: colorHex) }
+
+    /// Colored dot for menu items (a plain SF Symbol would be tinted monochrome).
+    static func swatch(_ hex: String) -> NSImage {
+        let image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
+            NSColor(Color(hex: hex)).setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
 }
 
 struct DrawerView: View {
@@ -26,7 +41,6 @@ struct DrawerView: View {
     unowned let ctrl: PanelController
     @ObservedObject private var settings = AppSettings.shared
 
-    @FocusState private var searchFocused: Bool
     @FocusState private var editorFocused: Bool
     @State private var scrolledID: Int64?
 
@@ -121,8 +135,11 @@ struct DrawerView: View {
 
     private var hintText: String {
         let n = state.selectedIndices.count
-        if n > 1 { return "\(n) selected   ⇧← → adjust   ⏎ copy all   ⌘⌫ delete   esc" }
-        return "← → navigate   ⇧← → multiselect   ⌘← ⌘→ boards   ⏎ copy   ⌘E edit   esc close"
+        if n > 1 {
+            return "\(n) selected   ⇧← → adjust   ⏎ paste all\(state.searchOpen ? "" : "   ⌘⌫ delete")   esc"
+        }
+        if state.searchOpen { return "← → navigate   ⇧← → multiselect   ⏎ paste   ⌘E edit   esc clear search" }
+        return "type to search   ← → navigate   ⇧← → multiselect   ⌘← ⌘→ boards   ⏎ paste   ⌘E edit   esc close"
     }
 
     private var emptyMessage: String {
@@ -145,7 +162,8 @@ struct DrawerView: View {
                 TabChip(label: "Clipboard", icon: "clock.arrow.circlepath", dot: nil,
                         isCurrent: state.currentBoardID == nil) { ctrl.activateBoard(nil) }
                 ForEach(state.boards) { board in
-                    BoardChip(board: board, isCurrent: state.currentBoardID == board.id, ctrl: ctrl)
+                    BoardChip(board: board, isCurrent: state.currentBoardID == board.id,
+                              isRenaming: state.renamingBoardID == board.id, ctrl: ctrl)
                 }
                 iconButton("plus", help: "New pinboard") { ctrl.createBoard() }
             }
@@ -157,19 +175,18 @@ struct DrawerView: View {
         .overlay(alignment: .trailing) {
             if !state.searchOpen { ellipsisMenu.padding(.trailing, 12) }
         }
-        .onChange(of: state.searchOpen) { searchFocused = state.searchOpen }
     }
 
     private var ellipsisMenu: some View {
         Menu {
-            Menu(state.isPaused ? "Paused" : "Pause Paste") {
+            Menu(state.isPaused ? "Paused" : "Pause Pastey") {
                 Button("Pause for 15 minutes") { ctrl.pause(for: 15 * 60) }
                 Button("Pause for 30 minutes") { ctrl.pause(for: 30 * 60) }
                 Button("Pause for 1 hour")     { ctrl.pause(for: 60 * 60) }
                 Button("Pause for 3 hours")    { ctrl.pause(for: 3 * 60 * 60) }
                 Button("Pause for 8 hours")    { ctrl.pause(for: 8 * 60 * 60) }
                 Divider()
-                Button(state.isPaused ? "Resume Paste" : "Pause Paste") { ctrl.togglePause() }
+                Button(state.isPaused ? "Resume Pastey" : "Pause Pastey") { ctrl.togglePause() }
             }
             Divider()
             Button("Settings…") { ctrl.openSettings() }
@@ -192,10 +209,7 @@ struct DrawerView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .font(.system(size: 14))
-            TextField("Search \(state.currentBoard?.name ?? "Clipboard")…", text: $state.query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .focused($searchFocused)
+            PanelTextField(text: $state.query, placeholder: "Search \(state.currentBoard?.name ?? "Clipboard")…")
             Button { state.searchOpen = false; state.query = "" } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 14))
@@ -228,9 +242,12 @@ struct DrawerView: View {
                 ForEach(Array(state.items.enumerated()), id: \.element.id) { index, item in
                     CardView(item: item, selected: state.selectedIndices.contains(index), boardColor: state.currentBoard?.color)
                         .id(item.id)
-                        .onTapGesture(count: 2) { ctrl.commit(item) }
-                        .onTapGesture { state.selectSingle(index) }
+                        .onTapGesture { ctrl.cardClicked(at: index) }
                         .contextMenu { cardMenu(for: item) }
+                        .onAppear {
+                            // Infinite scroll: fetch the next page as the end comes into view.
+                            if index >= state.items.count - 20 { state.loadMore() }
+                        }
                 }
             }
             .scrollTargetLayout()
@@ -251,6 +268,9 @@ struct DrawerView: View {
 
     @ViewBuilder
     private func cardMenu(for item: ClipItem) -> some View {
+        Button("Paste") { ctrl.paste([item]) }
+        Button("Copy") { ctrl.copy(item) }
+        Divider()
         Menu("Pin to") {
             ForEach(state.boards) { board in
                 Button(board.name) { ctrl.pin(item, to: board.id) }
@@ -258,7 +278,6 @@ struct DrawerView: View {
             if !state.boards.isEmpty { Divider() }
             Button("New Pinboard") { ctrl.pinToNewBoard(item) }
         }
-        Button("Copy") { ctrl.commit(item) }
         Divider()
         Button("Delete", role: .destructive) { ctrl.deleteItem(item) }
     }
@@ -306,56 +325,159 @@ struct TabChip: View {
     }
 }
 
+/// Click to open; click the open board again (or right-click › Rename) to rename it
+/// in place. Everything else lives in the right-click menu. No popover: it's its own
+/// window, and focusing its text field would activate Pastey and close the panel.
 struct BoardChip: View {
     let board: Board
     let isCurrent: Bool
+    let isRenaming: Bool
     unowned let ctrl: PanelController
 
-    @State private var showEdit = false
-    @State private var name = ""
-
     var body: some View {
-        TabLabel(dot: board.color, text: board.name, isCurrent: isCurrent)
-            .onTapGesture {
-                if isCurrent {
-                    name = board.name
-                    showEdit = true
-                } else {
-                    ctrl.activateBoard(board.id)
-                }
+        Group {
+            if isRenaming {
+                BoardNameField(board: board, ctrl: ctrl)
+            } else {
+                TabLabel(dot: board.color, text: board.name, isCurrent: isCurrent)
+                    .onTapGesture {
+                        if isCurrent {
+                            ctrl.beginRename(board.id)
+                        } else {
+                            ctrl.activateBoard(board.id)
+                        }
+                    }
             }
-            .popover(isPresented: $showEdit, arrowEdge: .bottom) { editor }
-    }
-
-    private var editor: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Board name", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 180)
-                .onSubmit {
-                    ctrl.renameBoard(board.id, to: name.isEmpty ? "Untitled" : name)
-                    showEdit = false
-                }
-            HStack(spacing: 6) {
-                ForEach(Board.presetColors, id: \.self) { hex in
-                    Circle()
-                        .fill(Color(hex: hex))
-                        .frame(width: 16, height: 16)
-                        .overlay(Circle().strokeBorder(.white.opacity(hex == board.colorHex ? 0.9 : 0), lineWidth: 2))
-                        .contentShape(Circle())
-                        .onTapGesture { ctrl.recolorBoard(board.id, to: hex) }
+        }
+        .contextMenu {
+            Button("Rename") { ctrl.beginRename(board.id) }
+            Menu("Color") {
+                ForEach(Array(zip(Board.presetColors, Board.presetColorNames)), id: \.0) { preset in
+                    Button { ctrl.recolorBoard(board.id, to: preset.0) } label: {
+                        Label { Text(preset.1) } icon: { Image(nsImage: Board.swatch(preset.0)) }
+                    }
                 }
             }
             Divider()
-            Button("Delete Pinboard", role: .destructive) {
-                showEdit = false
-                ctrl.deleteBoard(board.id)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.red)
-            .font(.system(size: 12))
+            Button("Delete Pinboard", role: .destructive) { ctrl.deleteBoard(board.id) }
         }
-        .padding(12)
+    }
+}
+
+/// The chip in rename mode: same footprint, name field instead of the label.
+private struct BoardNameField: View {
+    let board: Board
+    unowned let ctrl: PanelController
+    @State private var name: String
+
+    init(board: Board, ctrl: PanelController) {
+        self.board = board
+        self.ctrl = ctrl
+        _name = State(initialValue: board.name)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(board.color).frame(width: 10, height: 10)
+            PanelTextField(text: $name, placeholder: "Board name", selectsAllOnFocus: true,
+                           onSubmit: { ctrl.finishRename(board.id, to: name) },
+                           onCancel: { ctrl.finishRename(board.id, to: nil) })
+                .frame(width: 140)
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(0.14)))
+    }
+}
+
+// MARK: - Text field
+
+/// AppKit-backed single-line field (search, board rename) that takes focus as soon as
+/// it appears. SwiftUI's TextField can't place the caret when focused in code (it
+/// selects everything), which would eat type-to-search's first keystroke.
+struct PanelTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder = ""
+    var selectsAllOnFocus = false
+    var onSubmit: () -> Void = {}
+    var onCancel: () -> Void = {}
+
+    func makeNSView(context: Context) -> AutoFocusTextField {
+        let field = AutoFocusTextField()
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.usesSingleLineMode = true
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
+        field.font = .systemFont(ofSize: 15)
+        field.selectsAllOnFocus = selectsAllOnFocus
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: AutoFocusTextField, context: Context) {
+        context.coordinator.parent = self
+        if field.stringValue != text { field.stringValue = text }
+        field.placeholderString = placeholder
+    }
+
+    /// Fill the offered width (like TextField); height from the font.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: AutoFocusTextField, context: Context) -> CGSize? {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 200
+        return CGSize(width: width, height: nsView.intrinsicContentSize.height)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: PanelTextField
+        init(parent: PanelTextField) { self.parent = parent }
+
+        func controlTextDidChange(_ note: Notification) {
+            guard let field = note.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func controlTextDidEndEditing(_ note: Notification) {
+            parent.onSubmit()
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.onSubmit()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.onCancel()
+                return true
+            default:
+                return false
+            }
+        }
+    }
+}
+
+final class AutoFocusTextField: NSTextField {
+    var selectsAllOnFocus = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        // Next turn: SwiftUI is still mid-update when it inserts us.
+        DispatchQueue.main.async { [weak self] in self?.takeFocus() }
+    }
+
+    /// Take keyboard focus: all text selected if `selectsAllOnFocus`, otherwise the
+    /// caret after any typed-ahead text.
+    func takeFocus() {
+        guard let window, window.makeFirstResponder(self) else { return }
+        if !selectsAllOnFocus {
+            // makeFirstResponder selects all; move the caret to the end instead.
+            let end = (stringValue as NSString).length
+            currentEditor()?.selectedRange = NSRange(location: end, length: 0)
+        }
     }
 }
 
