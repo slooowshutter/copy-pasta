@@ -49,7 +49,8 @@ final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
     var onMenuBarChange: ((Bool) -> Void)?
-    var onShortcutChange: (() -> Void)?
+    /// Re-registers the global hotkey with the current shortcut; false if another app holds it.
+    var onShortcutChange: (() -> Bool)?
 
     // Guards: SwiftUI can re-assign a binding its current value, which would re-run
     // these side effects (re-register login item + its macOS toast, rebuild the
@@ -60,6 +61,8 @@ final class AppSettings: ObservableObject {
         if showInMenuBar != oldValue { onMenuBarChange?(showInMenuBar) }
     } }
     @Published var soundEffects: Bool { didSet { d.set(soundEffects, forKey: Keys.sound) } }
+    /// Enter / double-click pastes into the frontmost app (needs Accessibility), not just copies.
+    @Published var pasteDirectly: Bool { didSet { d.set(pasteDirectly, forKey: Keys.pasteDirectly) } }
     @Published var glassStyle: GlassStyle { didSet { d.set(glassStyle.rawValue, forKey: Keys.glassStyle) } }
     @Published var keepHistory: KeepHistory { didSet {
         d.set(keepHistory.rawValue, forKey: Keys.keepHistory)
@@ -67,10 +70,14 @@ final class AppSettings: ObservableObject {
     } }
 
     // Shortcut is mutated only through setShortcut/resetShortcut so its three parts
-    // stay consistent and the re-register callback fires exactly once.
+    // stay consistent and the hotkey is only re-registered with all three in place.
     @Published private(set) var shortcutKeyCode: UInt32
     @Published private(set) var shortcutModifiers: UInt32
     @Published private(set) var shortcutKeyLabel: String
+    /// Runtime only: set by AppDelegate when another app already owns the shortcut.
+    @Published var shortcutUnavailable = false
+    /// Runtime only: the last combo recorded in Settings that another app owns (not kept).
+    @Published var rejectedShortcut: String?
 
     static let defaultKeyCode = UInt32(kVK_ANSI_V)
     static let defaultModifiers = UInt32(cmdKey | shiftKey) // ⇧⌘V
@@ -81,6 +88,7 @@ final class AppSettings: ObservableObject {
     private enum Keys {
         static let menuBar = "showInMenuBar"
         static let sound = "soundEffects"
+        static let pasteDirectly = "pasteDirectly"
         static let glassStyle = "glassStyle"
         static let keepHistory = "keepHistory"
         static let keyCode = "shortcutKeyCode"
@@ -92,6 +100,7 @@ final class AppSettings: ObservableObject {
         d.register(defaults: [
             Keys.menuBar: true,
             Keys.sound: false,
+            Keys.pasteDirectly: true,
             Keys.glassStyle: GlassStyle.off.rawValue,
             Keys.keepHistory: KeepHistory.month.rawValue,
             Keys.keyCode: Int(Self.defaultKeyCode),
@@ -102,6 +111,7 @@ final class AppSettings: ObservableObject {
         openAtLogin = (SMAppService.mainApp.status == .enabled)
         showInMenuBar = d.bool(forKey: Keys.menuBar)
         soundEffects = d.bool(forKey: Keys.sound)
+        pasteDirectly = d.bool(forKey: Keys.pasteDirectly)
         glassStyle = GlassStyle(rawValue: d.integer(forKey: Keys.glassStyle)) ?? .off
         keepHistory = KeepHistory(rawValue: d.integer(forKey: Keys.keepHistory)) ?? .month
         shortcutKeyCode = UInt32(d.integer(forKey: Keys.keyCode))
@@ -109,14 +119,28 @@ final class AppSettings: ObservableObject {
         shortcutKeyLabel = d.string(forKey: Keys.keyLabel) ?? Self.defaultLabel
     }
 
-    func setShortcut(keyCode: UInt32, modifiers: UInt32, label: String) {
+    /// Saves and registers a new shortcut. If another app already holds the combo, keeps
+    /// the current one instead (rather than leave Pastey with no shortcut at all), sets
+    /// `rejectedShortcut`, and returns false.
+    @discardableResult
+    func setShortcut(keyCode: UInt32, modifiers: UInt32, label: String) -> Bool {
+        let old = (keyCode: shortcutKeyCode, modifiers: shortcutModifiers, label: shortcutKeyLabel)
+        storeShortcut(keyCode: keyCode, modifiers: modifiers, label: label)
+        rejectedShortcut = nil
+        if onShortcutChange?() != false { return true }
+        rejectedShortcut = shortcutGlyphs
+        storeShortcut(keyCode: old.keyCode, modifiers: old.modifiers, label: old.label)
+        _ = onShortcutChange?()
+        return false
+    }
+
+    private func storeShortcut(keyCode: UInt32, modifiers: UInt32, label: String) {
         shortcutKeyCode = keyCode
         shortcutModifiers = modifiers
         shortcutKeyLabel = label
         d.set(Int(keyCode), forKey: Keys.keyCode)
         d.set(Int(modifiers), forKey: Keys.modifiers)
         d.set(label, forKey: Keys.keyLabel)
-        onShortcutChange?()
     }
 
     func resetShortcut() {

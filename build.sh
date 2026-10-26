@@ -10,10 +10,16 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp .build/release/Pastey "$APP/Contents/MacOS/Pastey"
 cp Info.plist "$APP/Contents/Info.plist"
-# ponytail: ad-hoc signature is enough until we need Accessibility (phase 3),
-# then switch to a stable self-signed cert so macOS stops forgetting the permission.
-codesign --force --sign - "$APP"
+# Auto-paste needs Accessibility permission, which macOS ties to the signature. An
+# ad-hoc signature changes every build, so the grant is lost on each rebuild; signing
+# with a stable certificate (README › Accessibility permission) keeps it.
+IDENTITY="${PASTEY_SIGN_IDENTITY:--}"
+codesign --force --sign "$IDENTITY" "$APP"
 echo "Built $APP"
+if [[ "$IDENTITY" == "-" ]]; then
+    echo "Note: ad-hoc signed, so macOS forgets Pastey's Accessibility permission on every"
+    echo "      rebuild. Set PASTEY_SIGN_IDENTITY to keep it (see README)."
+fi
 
 if [[ "${1:-}" == "run" ]]; then
     pkill -x Pastey 2>/dev/null || true

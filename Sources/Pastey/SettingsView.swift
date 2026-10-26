@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Carbon.HIToolbox
+import Combine
 
 struct SettingsView: View {
     private enum Pane: String, CaseIterable, Identifiable {
@@ -97,6 +98,9 @@ private struct RowDivider: View {
 
 private struct GeneralPane: View {
     @ObservedObject private var settings = AppSettings.shared
+    // Nothing notifies us when the user flips the switch in System Settings; poll.
+    @State private var accessibilityGranted = Paster.isTrusted
+    private let accessibilityPoll = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
@@ -124,6 +128,31 @@ private struct GeneralPane: View {
                     .fixedSize()
                 }
             }
+
+            VStack(alignment: .leading, spacing: 12) {
+                SectionLabel(text: "Pasting")
+                Card {
+                    SettingRow(title: "Paste directly into the active app") {
+                        Toggle("", isOn: $settings.pasteDirectly).labelsHidden().toggleStyle(.switch)
+                    }
+                    if settings.pasteDirectly {
+                        RowDivider()
+                        SettingRow(title: "Accessibility access") {
+                            if accessibilityGranted {
+                                Label("Granted", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            } else {
+                                Button("Grant Access…") { Paster.requestAccess() }
+                            }
+                        }
+                    }
+                }
+                Text("Enter or double-click pastes the item into the app you were in. macOS only allows that with Accessibility access; without it, the item is copied and you press ⌘V yourself.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .onReceive(accessibilityPoll) { _ in accessibilityGranted = Paster.isTrusted }
 
             VStack(alignment: .leading, spacing: 12) {
                 SectionLabel(text: "Keep History")
@@ -183,6 +212,13 @@ private struct ShortcutsPane: View {
                 }
             }
 
+            if let rejected = settings.rejectedShortcut, rejected != settings.shortcutGlyphs {
+                warning("\(rejected) is already used by another app, so Pastey kept \(settings.shortcutGlyphs). Record a different shortcut, or quit that app first.")
+            }
+            if settings.shortcutUnavailable {
+                warning("\(settings.shortcutGlyphs) is already used by another app (Paste, Maccy, …), so it won't open Pastey. Quit that app or record a different shortcut.")
+            }
+
             Text("Activate Pastey is rebindable — click the field, then press the keys you want (needs a modifier; esc cancels). Edit Text (⌘E) works on the selected item while the panel is open.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
@@ -193,6 +229,13 @@ private struct ShortcutsPane: View {
 
             Spacer(minLength: 0)
         }
+    }
+
+    private func warning(_ text: String) -> some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .font(.system(size: 12))
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -275,11 +318,12 @@ final class RecorderView: NSView {
         }
         let modifiers = carbonModifiers(event.modifierFlags)
         guard modifiers != 0 else { NSSound.beep(); return }   // ignore bare keys, stay recording
-        AppSettings.shared.setShortcut(
+        let saved = AppSettings.shared.setShortcut(
             keyCode: UInt32(event.keyCode),
             modifiers: modifiers,
             label: keyLabel(for: event)
         )
+        if !saved { NSSound.beep() }   // another app holds it; Settings says so
         window?.makeFirstResponder(nil)
     }
 

@@ -104,6 +104,20 @@ final class DB {
         """)
         // Migration from v0.1 schema; errors (column already exists) are ignored.
         exec("ALTER TABLE items ADD COLUMN board_id INTEGER")
+        // Repair board items whose ":b<board>" hash suffix an earlier text edit dropped
+        // (see updateText). OR IGNORE: if the repaired hash already exists, leave the row.
+        exec("UPDATE OR IGNORE items SET content_hash = content_hash || ':b' || board_id WHERE board_id IS NOT NULL AND instr(content_hash, ':b') = 0")
+
+        // Search matches like the old in-memory filter did (localized, case-insensitive;
+        // SQLite's LIKE only folds ASCII), but across all of history, not one page.
+        sqlite3_create_function_v2(db, "pastey_contains", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { ctx, _, argv in
+            guard let haystack = sqlite3_value_text(argv?[0]), let needle = sqlite3_value_text(argv?[1]) else {
+                sqlite3_result_int(ctx, 0)
+                return
+            }
+            let found = String(cString: haystack).localizedCaseInsensitiveContains(String(cString: needle))
+            sqlite3_result_int(ctx, found ? 1 : 0)
+        }, nil, nil, nil)
     }
 
     private func exec(_ sql: String) {
@@ -135,7 +149,7 @@ final class DB {
     // MARK: - Operations
 
     /// Insert, or if the same content was copied before, bump it to the top.
-    func upsert(_ c: Capture, boardID: Int64? = nil) {
+    func upsert(_ c: Capture, boardID: Int64? = nil, at date: Date = Date()) {
         let sql = """
         INSERT INTO items (created_at, kind, plain_text, rtf, html, image_path, thumb, file_paths,
                            source_bundle_id, source_app_name, content_hash, char_count, pixel_w, pixel_h, board_id)
@@ -148,7 +162,7 @@ final class DB {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_double(stmt, 1, Date().timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 1, date.timeIntervalSince1970)
         bind(stmt, 2, c.kind.rawValue)
         bind(stmt, 3, c.plainText)
         bind(stmt, 4, c.rtf)
@@ -167,12 +181,14 @@ final class DB {
     }
 
     /// Replace an item's text (plain only — drops any rtf/html richness). Recomputes
-    /// the content hash so future dedup matches the new text; if that new hash would
-    /// collide with another item (content_hash is UNIQUE), keeps the old hash so the
-    /// edit still saves.
-    func updateText(_ id: Int64, to text: String) {
-        if !writeText(id, text: text, hash: sha256(Data(text.utf8))) {
-            writeText(id, text: text, hash: nil)
+    /// the content hash so future dedup matches the new text, keeping a pinned item's
+    /// board suffix (without it, the next copy of that text would bump the pinned item
+    /// instead of landing in history). If the new hash would collide with another item
+    /// (content_hash is UNIQUE), keeps the old hash so the edit still saves.
+    func updateText(_ item: ClipItem, to text: String) {
+        let boardSuffix = String(item.contentHash.dropFirst(Self.baseHash(item.contentHash).count))
+        if !writeText(item.id, text: text, hash: sha256(Data(text.utf8)) + boardSuffix) {
+            writeText(item.id, text: text, hash: nil)
         }
     }
 
@@ -196,11 +212,17 @@ final class DB {
     }
 
     /// boardID nil = the rolling clipboard history; otherwise items pinned to that board.
-    func recent(boardID: Int64? = nil, limit: Int = 200) -> [ClipItem] {
+    /// A non-empty `query` filters every row (text or source app), not just one page.
+    func recent(boardID: Int64? = nil, matching query: String = "", limit: Int = 200, offset: Int = 0) -> [ClipItem] {
+        var conditions = [boardID == nil ? "board_id IS NULL" : "board_id = ?"]
+        if !query.isEmpty {
+            conditions.append("(pastey_contains(plain_text, ?) OR pastey_contains(source_app_name, ?))")
+        }
         let sql = """
         SELECT id, created_at, kind, plain_text, rtf, html, image_path, thumb, file_paths,
                source_bundle_id, source_app_name, content_hash, char_count, pixel_w, pixel_h
-        FROM items WHERE board_id \(boardID == nil ? "IS NULL" : "= ?") ORDER BY created_at DESC LIMIT ?
+        FROM items WHERE \(conditions.joined(separator: " AND "))
+        ORDER BY created_at DESC LIMIT ? OFFSET ?
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
@@ -210,7 +232,13 @@ final class DB {
             sqlite3_bind_int64(stmt, idx, boardID)
             idx += 1
         }
+        if !query.isEmpty {
+            bind(stmt, idx, query)
+            bind(stmt, idx + 1, query)
+            idx += 2
+        }
         sqlite3_bind_int64(stmt, idx, Int64(limit))
+        sqlite3_bind_int64(stmt, idx + 1, Int64(offset))
         var items: [ClipItem] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             items.append(ClipItem(
@@ -400,8 +428,19 @@ final class DB {
 
     /// Pinning copies the item into the board; the history row keeps rolling independently.
     func pin(_ item: ClipItem, to boardID: Int64) {
-        let base = item.contentHash.components(separatedBy: ":b").first ?? item.contentHash
-        let copy = Capture(
+        // per-board hash → re-pin dedups within the board
+        upsert(capture(of: item, hash: Self.baseHash(item.contentHash) + ":b\(boardID)"), boardID: boardID)
+    }
+
+    /// Copying an item out of the panel moves it to the top of history, like a fresh
+    /// copy would — but keeps its original source app, where the watcher would credit
+    /// whichever app happens to be frontmost. (From a board, this adds it to history.)
+    func bumpToHistory(_ item: ClipItem) {
+        upsert(capture(of: item, hash: Self.baseHash(item.contentHash)))
+    }
+
+    private func capture(of item: ClipItem, hash: String) -> Capture {
+        Capture(
             kind: item.kind,
             plainText: item.plainText,
             rtf: item.rtf,
@@ -411,12 +450,17 @@ final class DB {
             filePaths: item.filePaths,
             sourceBundleID: item.sourceBundleID,
             sourceAppName: item.sourceAppName,
-            contentHash: base + ":b\(boardID)", // per-board hash → re-pin dedups within the board
+            contentHash: hash,
             charCount: item.charCount,
             pixelW: item.pixelW,
             pixelH: item.pixelH
         )
-        upsert(copy, boardID: boardID)
+    }
+
+    /// Board copies carry a ":b<boardID>" hash suffix so the same content can sit in
+    /// history and in each board without tripping content_hash's UNIQUE constraint.
+    private static func baseHash(_ hash: String) -> String {
+        hash.components(separatedBy: ":b").first ?? hash
     }
 
     // MARK: - Pasteboard write-back

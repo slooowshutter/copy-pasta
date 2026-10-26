@@ -38,22 +38,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = DB.shared // open + migrate up-front, not lazily mid-use
         DB.shared.regenerateThumbnailsIfNeeded()
-        panelController = PanelController()
+        panelController = PanelController(watcher: watcher)
 
         let settings = AppSettings.shared
         settings.onMenuBarChange = { [weak self] visible in self?.setMenuBarVisible(visible) }
-        settings.onShortcutChange = { [weak self] in self?.applyShortcut() }
+        settings.onShortcutChange = { [weak self] in self?.applyShortcut() ?? false }
         DB.shared.pruneHistory(olderThan: settings.keepHistory.seconds) // enforce retention at launch
 
         watcher.onCapture = { [weak self] in
             guard let self, self.panelController.isVisible else { return }
-            self.panelController.state.reload()
+            self.panelController.state.reload(keepPosition: true)
         }
         watcher.start()
 
         // Default ⇧⌘V; user-rebindable in Settings › Shortcuts.
         hotKey = HotKey(keyCode: settings.shortcutKeyCode, modifiers: settings.shortcutModifiers) { [weak self] in
             self?.panelController.toggle()
+        }
+        settings.shortcutUnavailable = !(hotKey?.isRegistered ?? false)
+        if settings.shortcutUnavailable {
+            DispatchQueue.main.async { [weak self] in self?.warnShortcutUnavailable() }
+        }
+        // While another app holds the shortcut, take it back as soon as that app quits
+        // (what the warnings tell the user to do). A beat first, for the window server to
+        // release the quit app's hotkeys.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard AppSettings.shared.shortcutUnavailable else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self?.applyShortcut() }
         }
 
         DistributedNotificationCenter.default().addObserver(
@@ -185,10 +199,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applyShortcut() {
+    /// Registers the saved shortcut; false if another app holds it.
+    @discardableResult
+    func applyShortcut() -> Bool {
         let s = AppSettings.shared
-        hotKey?.update(keyCode: s.shortcutKeyCode, modifiers: s.shortcutModifiers)
+        let registered = hotKey?.update(keyCode: s.shortcutKeyCode, modifiers: s.shortcutModifiers) ?? false
+        s.shortcutUnavailable = !registered
         showItem?.title = "Show Pastey  \(s.shortcutGlyphs)"
+        return registered
+    }
+
+    /// At launch: the shortcut is the only way into the panel, so don't let a clash
+    /// with another clipboard app fail silently. (Settings › Shortcuts shows it too.)
+    private func warnShortcutUnavailable() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "\(AppSettings.shared.shortcutGlyphs) is already in use"
+        alert.informativeText = "Another app (Paste, Maccy, …) has this shortcut, so it won't open Pastey. Quit that app, or pick a different shortcut in Settings › Shortcuts."
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "OK")
+        if alert.runModal() == .alertFirstButtonReturn { openSettings() }
     }
 
     @objc private func menuOpenSettings() { openSettings() }
@@ -216,7 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Clear all clipboard history?"
-        alert.informativeText = "This deletes every stored item, including images. This cannot be undone."
+        alert.informativeText = "This deletes your whole clipboard history, including images. Items pinned to pinboards are kept. This cannot be undone."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Clear History")
         alert.addButton(withTitle: "Cancel")
