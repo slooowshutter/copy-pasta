@@ -120,7 +120,7 @@ final class AppSettings: ObservableObject {
     }
 
     /// Saves and registers a new shortcut. If another app already holds the combo, keeps
-    /// the current one instead (rather than leave Pastey with no shortcut at all), sets
+    /// the current one instead (rather than leave Copy Pasta with no shortcut at all), sets
     /// `rejectedShortcut`, and returns false.
     @discardableResult
     func setShortcut(keyCode: UInt32, modifiers: UInt32, label: String) -> Bool {

@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import Carbon.HIToolbox
 
-// Dev helpers: `Pastey --toggle` opens/closes the running instance's drawer,
-// `Pastey --snapshot` writes its rendered view to /tmp/pastey-panel.png.
+// Dev helpers: `CopyPasta --toggle` opens/closes the running instance's drawer,
+// `CopyPasta --snapshot` writes its rendered view to /tmp/copypasta-panel.png.
 for (arg, name) in [("--toggle", "toggle"), ("--snapshot", "snapshot"), ("--settings", "settings")]
 where CommandLine.arguments.contains(arg) {
     // `--snapshot --board Prompts` snapshots that tab.
@@ -19,7 +19,7 @@ where CommandLine.arguments.contains(arg) {
         info["select"] = CommandLine.arguments[i + 1]
     }
     DistributedNotificationCenter.default().postNotificationName(
-        Notification.Name("com.marclamy.pastey.\(name)"),
+        Notification.Name("com.marclamy.copypasta.\(name)"),
         object: nil, userInfo: info, deliverImmediately: true
     )
     exit(0)
@@ -71,14 +71,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.marclamy.pastey.toggle"),
+            forName: Notification.Name("com.marclamy.copypasta.toggle"),
             object: nil, queue: .main
         ) { [weak self] _ in
             self?.panelController.toggle()
         }
 
         DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.marclamy.pastey.snapshot"),
+            forName: Notification.Name("com.marclamy.copypasta.snapshot"),
             object: nil, queue: .main
         ) { [weak self] note in
             // Optional board name in userInfo lets the dev loop snapshot a specific tab.
@@ -99,10 +99,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Dev loop: `Pastey --settings` opens Settings and renders it to
-        // /tmp/pastey-settings.png (same no-permission cacheDisplay trick as --snapshot).
+        // Dev loop: `CopyPasta --settings` opens Settings and renders it to
+        // /tmp/copypasta-settings.png (same no-permission cacheDisplay trick as --snapshot).
         DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.marclamy.pastey.settings"),
+            forName: Notification.Name("com.marclamy.copypasta.settings"),
             object: nil, queue: .main
         ) { [weak self] _ in
             self?.openSettings()
@@ -111,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
                 view.cacheDisplay(in: view.bounds, to: rep)
                 try? rep.representation(using: .png, properties: [:])?
-                    .write(to: URL(fileURLWithPath: "/tmp/pastey-settings.png"))
+                    .write(to: URL(fileURLWithPath: "/tmp/copypasta-settings.png"))
             }
         }
 
@@ -122,14 +122,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(
             systemSymbolName: watcher.isPaused ? "clipboard" : "clipboard.fill",
-            accessibilityDescription: "Pastey"
+            accessibilityDescription: "Copy Pasta"
         )
 
         let menu = NSMenu()
 
         // Title shows the shortcut as text only — the global hotkey is registered
         // once via Carbon (HotKey). Binding it here too would double-fire toggle().
-        let show = NSMenuItem(title: "Show Pastey  \(AppSettings.shared.shortcutGlyphs)", action: #selector(toggleDrawer), keyEquivalent: "")
+        let show = NSMenuItem(title: "Show Copy Pasta  \(AppSettings.shared.shortcutGlyphs)", action: #selector(toggleDrawer), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
         showItem = show
@@ -151,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit Pastey", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit Copy Pasta", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
 
         item.menu = menu
@@ -183,7 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pauseItem?.title = paused ? "Resume Watching" : "Pause Watching"
         statusItem?.button?.image = NSImage(
             systemSymbolName: paused ? "clipboard" : "clipboard.fill",
-            accessibilityDescription: "Pastey"
+            accessibilityDescription: "Copy Pasta"
         )
         if !paused { pauseTimer?.invalidate(); pauseTimer = nil }
     }
@@ -205,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = AppSettings.shared
         let registered = hotKey?.update(keyCode: s.shortcutKeyCode, modifiers: s.shortcutModifiers) ?? false
         s.shortcutUnavailable = !registered
-        showItem?.title = "Show Pastey  \(s.shortcutGlyphs)"
+        showItem?.title = "Show Copy Pasta  \(s.shortcutGlyphs)"
         return registered
     }
 
@@ -215,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "\(AppSettings.shared.shortcutGlyphs) is already in use"
-        alert.informativeText = "Another app (Paste, Maccy, …) has this shortcut, so it won't open Pastey. Quit that app, or pick a different shortcut in Settings › Shortcuts."
+        alert.informativeText = "Another app (Paste, Maccy, …) has this shortcut, so it won't open Copy Pasta. Quit that app, or pick a different shortcut in Settings › Shortcuts."
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "OK")
         if alert.runModal() == .alertFirstButtonReturn { openSettings() }
@@ -230,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered, defer: false
             )
-            w.title = "Pastey Settings"
+            w.title = "Copy Pasta Settings"
             w.isReleasedWhenClosed = false
             w.appearance = NSAppearance(named: .darkAqua) // match the dark drawer
             w.center()

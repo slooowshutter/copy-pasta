@@ -179,19 +179,19 @@ struct DrawerView: View {
 
     private var ellipsisMenu: some View {
         Menu {
-            Menu(state.isPaused ? "Paused" : "Pause Pastey") {
+            Menu(state.isPaused ? "Paused" : "Pause Copy Pasta") {
                 Button("Pause for 15 minutes") { ctrl.pause(for: 15 * 60) }
                 Button("Pause for 30 minutes") { ctrl.pause(for: 30 * 60) }
                 Button("Pause for 1 hour")     { ctrl.pause(for: 60 * 60) }
                 Button("Pause for 3 hours")    { ctrl.pause(for: 3 * 60 * 60) }
                 Button("Pause for 8 hours")    { ctrl.pause(for: 8 * 60 * 60) }
                 Divider()
-                Button(state.isPaused ? "Resume Pastey" : "Pause Pastey") { ctrl.togglePause() }
+                Button(state.isPaused ? "Resume Copy Pasta" : "Pause Copy Pasta") { ctrl.togglePause() }
             }
             Divider()
             Button("Settings…") { ctrl.openSettings() }
             Divider()
-            Button("Quit Pastey") { NSApp.terminate(nil) }
+            Button("Quit Copy Pasta") { NSApp.terminate(nil) }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .medium))
@@ -327,7 +327,7 @@ struct TabChip: View {
 
 /// Click to open; click the open board again (or right-click › Rename) to rename it
 /// in place. Everything else lives in the right-click menu. No popover: it's its own
-/// window, and focusing its text field would activate Pastey and close the panel.
+/// window, and focusing its text field would activate Copy Pasta and close the panel.
 struct BoardChip: View {
     let board: Board
     let isCurrent: Bool

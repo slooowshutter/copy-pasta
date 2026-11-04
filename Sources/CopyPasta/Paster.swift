@@ -7,7 +7,7 @@ import Carbon
 enum Paster {
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
-    /// Shows the system "allow Accessibility" prompt, which also lists Pastey in
+    /// Shows the system "allow Accessibility" prompt, which also lists Copy Pasta in
     /// System Settings › Privacy & Security › Accessibility.
     static func requestAccess() {
         // The value of kAXTrustedCheckOptionPrompt (its Swift import differs across SDKs).
