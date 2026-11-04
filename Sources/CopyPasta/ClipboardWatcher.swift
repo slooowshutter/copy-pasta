@@ -11,7 +11,7 @@ final class ClipboardWatcher {
     private var timer: Timer?
     /// PNG encoding, hashing and thumbnailing a big screenshot can take a few hundred
     /// ms — off the main thread so the hotkey and panel stay responsive meanwhile.
-    private let imageQueue = DispatchQueue(label: "com.marclamy.pastey.images", qos: .userInitiated)
+    private let imageQueue = DispatchQueue(label: "com.marclamy.copypasta.images", qos: .userInitiated)
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -19,7 +19,7 @@ final class ClipboardWatcher {
         }
     }
 
-    /// Pastey's own writes (picking an item in the panel) aren't new copies: mark the
+    /// Copy Pasta's own writes (picking an item in the panel) aren't new copies: mark the
     /// current change as seen so the next tick skips it.
     func skipCurrentChange() {
         lastChange = NSPasteboard.general.changeCount

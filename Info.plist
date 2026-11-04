@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Pastey</string>
+    <string>Copy Pasta</string>
     <key>CFBundleDisplayName</key>
-    <string>Pastey</string>
+    <string>Copy Pasta</string>
     <key>CFBundleIdentifier</key>
-    <string>com.marclamy.pastey</string>
+    <string>com.marclamy.copypasta</string>
     <key>CFBundleExecutable</key>
-    <string>Pastey</string>
+    <string>CopyPasta</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

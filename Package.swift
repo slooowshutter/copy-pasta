@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "Pastey",
+    name: "CopyPasta",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Pastey", path: "Sources/Pastey")
+        .executableTarget(name: "CopyPasta", path: "Sources/CopyPasta")
     ]
 )

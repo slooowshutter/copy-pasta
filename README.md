@@ -20,26 +20,26 @@ No prebuilt binary yet — build it from source (takes ~30s):
 git clone https://github.com/marclelamy/copy-pasta.git
 cd copy-pasta
 ./build.sh
-open dist/Pastey.app
+open "dist/Copy Pasta.app"
 ```
 
-To install permanently, drag `dist/Pastey.app` into `/Applications`.
+To install permanently, drag `dist/Copy Pasta.app` into `/Applications`.
 
-Pastey has no dock icon — it runs from the menu bar. Press `⇧⌘V` to open it.
+Copy Pasta has no dock icon — it runs from the menu bar. Press `⇧⌘V` to open it.
 
-The first time you press `Enter`, macOS asks to give Pastey **Accessibility** access. Pastey needs it to type `⌘V` into your app for you. Without it, `Enter` only copies the item and you paste it yourself. You can turn auto-paste off in Settings › General.
+The first time you press `Enter`, macOS asks to give Copy Pasta **Accessibility** access. Copy Pasta needs it to type `⌘V` into your app for you. Without it, `Enter` only copies the item and you paste it yourself. You can turn auto-paste off in Settings › General.
 
 ### Accessibility permission
 
-macOS ties the permission to the app's code signature. `./build.sh` signs ad-hoc by default, and that signature changes on every build, so **each rebuild loses the permission**. System Settings still shows Pastey as enabled, but the permission no longer applies. To fix it, remove Pastey from the list with **−**, then grant access again.
+macOS ties the permission to the app's code signature. `./build.sh` signs ad-hoc by default, and that signature changes on every build, so **each rebuild loses the permission**. System Settings still shows Copy Pasta as enabled, but the permission no longer applies. To fix it, remove Copy Pasta from the list with **−**, then grant access again.
 
 To keep the permission across rebuilds, sign with a stable certificate once:
 
 1. Open **Keychain Access** › menu **Keychain Access › Certificate Assistant › Create a Certificate…**
-2. Name: `Pastey Dev`, Identity Type: **Self Signed Root**, Certificate Type: **Code Signing**, then **Create**
-3. Build with `PASTEY_SIGN_IDENTITY="Pastey Dev" ./build.sh` (export it in your shell profile to make it stick)
+2. Name: `Copy Pasta Dev`, Identity Type: **Self Signed Root**, Certificate Type: **Code Signing**, then **Create**
+3. Build with `COPYPASTA_SIGN_IDENTITY="Copy Pasta Dev" ./build.sh` (export it in your shell profile to make it stick)
 
-> **Note:** the app is ad-hoc signed. Building it yourself (as above) is fine. If you instead download a prebuilt `.app`, macOS Gatekeeper will block it — right-click the app → **Open**, or run `xattr -dr com.apple.quarantine Pastey.app`.
+> **Note:** the app is ad-hoc signed. Building it yourself (as above) is fine. If you instead download a prebuilt `.app`, macOS Gatekeeper will block it — right-click the app → **Open**, or run `xattr -dr com.apple.quarantine "Copy Pasta.app"`.
 
 ## Usage
 
@@ -58,7 +58,7 @@ To keep the permission across rebuilds, sign with a stable certificate once:
 Open from the menu bar icon → Settings:
 
 - **General** — launch at login, auto-paste (and its Accessibility status), history retention, menu bar icon visibility
-- **Shortcuts** — rebind the open/close hotkey. If another app (the real Paste, Maccy, …) already uses the shortcut, Pastey warns you here and at launch
+- **Shortcuts** — rebind the open/close hotkey. If another app (the real Paste, Maccy, …) already uses the shortcut, Copy Pasta warns you here and at launch
 
 ## Importing from Paste.app
 
@@ -68,9 +68,9 @@ Migrating off the real Paste (Setapp)? `scripts/import_paste.py` pulls your text
 
 ```bash
 ./build.sh run          # build + relaunch
-Pastey --toggle         # open/close the running instance's panel
-Pastey --snapshot       # render the panel to /tmp/pastey-panel.png
-Pastey --settings       # open the Settings window
+CopyPasta --toggle         # open/close the running instance's panel
+CopyPasta --snapshot       # render the panel to /tmp/copypasta-panel.png
+CopyPasta --settings       # open the Settings window
 ```
 
-History is stored in a SQLite database at `~/Library/Application Support/Pastey/pastey.db`.
+History is stored in a SQLite database at `~/Library/Application Support/Copy Pasta/copypasta.db`.

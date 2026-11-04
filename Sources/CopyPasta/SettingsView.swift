@@ -203,7 +203,7 @@ private struct ShortcutsPane: View {
             PaneTitle(text: "Shortcuts")
 
             Card {
-                SettingRow(title: "Activate Pastey") {
+                SettingRow(title: "Activate Copy Pasta") {
                     ShortcutRecorder().frame(width: 132, height: 28)
                 }
                 RowDivider()
@@ -213,13 +213,13 @@ private struct ShortcutsPane: View {
             }
 
             if let rejected = settings.rejectedShortcut, rejected != settings.shortcutGlyphs {
-                warning("\(rejected) is already used by another app, so Pastey kept \(settings.shortcutGlyphs). Record a different shortcut, or quit that app first.")
+                warning("\(rejected) is already used by another app, so Copy Pasta kept \(settings.shortcutGlyphs). Record a different shortcut, or quit that app first.")
             }
             if settings.shortcutUnavailable {
-                warning("\(settings.shortcutGlyphs) is already used by another app (Paste, Maccy, …), so it won't open Pastey. Quit that app or record a different shortcut.")
+                warning("\(settings.shortcutGlyphs) is already used by another app (Paste, Maccy, …), so it won't open Copy Pasta. Quit that app or record a different shortcut.")
             }
 
-            Text("Activate Pastey is rebindable — click the field, then press the keys you want (needs a modifier; esc cancels). Edit Text (⌘E) works on the selected item while the panel is open.")
+            Text("Activate Copy Pasta is rebindable — click the field, then press the keys you want (needs a modifier; esc cancels). Edit Text (⌘E) works on the selected item while the panel is open.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off importer: real Paste.app (Setapp) Core Data store -> Pastey SQLite.
+"""One-off importer: real Paste.app (Setapp) Core Data store -> Copy Pasta SQLite.
 
 Imports text/link items only. Paste stores the full payload encrypted; the
 cleartext JSON *preview* caps text at 500 chars, so longer items import
@@ -12,7 +12,7 @@ import sqlite3, json, hashlib, os, sys, plistlib
 
 COCOA_EPOCH = 978307200  # 2001-01-01 -> unix
 PASTE_SRC = "/tmp/paste-import.sqlite"  # safe .backup copy of Paste's db.sqlite
-PASTEY_DB = os.path.expanduser("~/Library/Application Support/Pastey/pastey.db")
+COPYPASTA_DB = os.path.expanduser("~/Library/Application Support/Copy Pasta/copypasta.db")
 
 # Paste pinboards to import (name -> Paste list ZIDENTIFIER prefix is irrelevant; match by name)
 WANTED_BOARDS = ["Prompts", "Code", "Useful Links"]
@@ -56,7 +56,7 @@ def main():
         HISTORY_LIMIT = int(sys.argv[sys.argv.index("--history-limit") + 1])
 
     src = sqlite3.connect(PASTE_SRC)
-    dst = sqlite3.connect(PASTEY_DB)
+    dst = sqlite3.connect(COPYPASTA_DB)
 
     # source-app lookup
     apps = {pk: (name, bid) for pk, name, bid in

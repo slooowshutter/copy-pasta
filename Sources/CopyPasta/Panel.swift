@@ -320,7 +320,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         if andPaste { pasteIntoFrontApp() }
     }
 
-    /// The panel never activates Pastey, so the user's app is still frontmost and gets
+    /// The panel never activates Copy Pasta, so the user's app is still frontmost and gets
     /// the ⌘V once the panel is gone. Without Accessibility permission the item is still
     /// on the clipboard: ask once per launch, then quietly fall back to copy-only.
     private func pasteIntoFrontApp() {
@@ -426,7 +426,7 @@ final class PanelController: NSObject, NSWindowDelegate {
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?
-                .write(to: URL(fileURLWithPath: "/tmp/pastey-panel.png"))
+                .write(to: URL(fileURLWithPath: "/tmp/copypasta-panel.png"))
         }
     }
 

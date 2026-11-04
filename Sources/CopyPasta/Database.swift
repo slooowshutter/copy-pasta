@@ -57,9 +57,24 @@ final class DB {
     static let shared = DB()
 
     static let supportDir: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Pastey", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fm = FileManager.default
+        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = support.appendingPathComponent("Copy Pasta", isDirectory: true)
+        // The app was called Pastey: on the first launch after the rename, take over its
+        // history and settings. Settings too, or the default one-month retention would
+        // prune history someone chose to keep longer. Runs before anything reads either.
+        let pastey = support.appendingPathComponent("Pastey", isDirectory: true)
+        if !fm.fileExists(atPath: dir.path), fm.fileExists(atPath: pastey.path) {
+            try? fm.moveItem(at: pastey, to: dir)
+            for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.hasPrefix("pastey.") {
+                try? fm.moveItem(at: dir.appendingPathComponent(name),
+                                 to: dir.appendingPathComponent("copypasta." + name.dropFirst("pastey.".count)))
+            }
+            if let settings = UserDefaults.standard.persistentDomain(forName: "com.marclamy.pastey") {
+                UserDefaults.standard.setPersistentDomain(settings, forName: "com.marclamy.copypasta")
+            }
+        }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
 
@@ -72,7 +87,7 @@ final class DB {
     private var db: OpaquePointer?
 
     private init() {
-        sqlite3_open(DB.supportDir.appendingPathComponent("pastey.db").path, &db)
+        sqlite3_open(DB.supportDir.appendingPathComponent("copypasta.db").path, &db)
         exec("PRAGMA journal_mode=WAL")
         exec("""
         CREATE TABLE IF NOT EXISTS items (
@@ -110,7 +125,7 @@ final class DB {
 
         // Search matches like the old in-memory filter did (localized, case-insensitive;
         // SQLite's LIKE only folds ASCII), but across all of history, not one page.
-        sqlite3_create_function_v2(db, "pastey_contains", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { ctx, _, argv in
+        sqlite3_create_function_v2(db, "copypasta_contains", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { ctx, _, argv in
             guard let haystack = sqlite3_value_text(argv?[0]), let needle = sqlite3_value_text(argv?[1]) else {
                 sqlite3_result_int(ctx, 0)
                 return
@@ -216,7 +231,7 @@ final class DB {
     func recent(boardID: Int64? = nil, matching query: String = "", limit: Int = 200, offset: Int = 0) -> [ClipItem] {
         var conditions = [boardID == nil ? "board_id IS NULL" : "board_id = ?"]
         if !query.isEmpty {
-            conditions.append("(pastey_contains(plain_text, ?) OR pastey_contains(source_app_name, ?))")
+            conditions.append("(copypasta_contains(plain_text, ?) OR copypasta_contains(source_app_name, ?))")
         }
         let sql = """
         SELECT id, created_at, kind, plain_text, rtf, html, image_path, thumb, file_paths,
@@ -492,11 +507,11 @@ func sha256(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
-/// Lightweight diagnostic log at ~/Library/Application Support/Pastey/pastey.log.
+/// Lightweight diagnostic log at ~/Library/Application Support/Copy Pasta/copypasta.log.
 func plog(_ msg: String) {
     let line = "\(ISO8601DateFormatter().string(from: Date()))  \(msg)\n"
     guard let data = line.data(using: .utf8) else { return }
-    let url = DB.supportDir.appendingPathComponent("pastey.log")
+    let url = DB.supportDir.appendingPathComponent("copypasta.log")
     if let handle = try? FileHandle(forWritingTo: url) {
         handle.seekToEndOfFile()
         handle.write(data)

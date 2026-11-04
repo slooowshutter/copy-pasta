@@ -28,7 +28,7 @@ final class HotKey {
     @discardableResult
     func update(keyCode: UInt32, modifiers: UInt32) -> Bool {
         if let ref { UnregisterEventHotKey(ref); self.ref = nil }
-        let id = EventHotKeyID(signature: OSType(0x50535459), id: 1) // "PSTY"
+        let id = EventHotKeyID(signature: OSType(0x434F5041), id: 1) // "COPA"
         // Exclusive: without it, registering a combo another app holds "succeeds" and
         // the shortcut just never fires. This way we fail loudly and can tell the user.
         let status = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(),
