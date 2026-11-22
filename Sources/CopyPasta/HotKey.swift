@@ -9,6 +9,9 @@ final class HotKey {
     /// False when another app (Paste, Maccy…) already holds the combo.
     private(set) var isRegistered = false
 
+    /// "PSTY". Dictation's ⌥⇧⌘Space (HotkeyService) is "SSHK": each handler only takes its own.
+    private static let signature = OSType(0x50535459)
+
     init(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) {
         HotKey.handler = action
         var eventType = EventTypeSpec(
@@ -16,7 +19,14 @@ final class HotKey {
             eventKind: UInt32(kEventHotKeyPressed)
         )
         // Installed once; re-binding only re-runs Unregister/Register in update().
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+            var id = EventHotKeyID()
+            let status = GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                                           EventParamType(typeEventHotKeyID), nil,
+                                           MemoryLayout<EventHotKeyID>.size, nil, &id)
+            guard status == noErr, id.signature == HotKey.signature else {
+                return OSStatus(eventNotHandledErr) // another hotkey: let its handler have it
+            }
             HotKey.handler?()
             return noErr
         }, 1, &eventType, nil, nil)
@@ -28,7 +38,7 @@ final class HotKey {
     @discardableResult
     func update(keyCode: UInt32, modifiers: UInt32) -> Bool {
         if let ref { UnregisterEventHotKey(ref); self.ref = nil }
-        let id = EventHotKeyID(signature: OSType(0x50535459), id: 1) // "PSTY"
+        let id = EventHotKeyID(signature: HotKey.signature, id: 1)
         // Exclusive: without it, registering a combo another app holds "succeeds" and
         // the shortcut just never fires. This way we fail loudly and can tell the user.
         let status = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(),

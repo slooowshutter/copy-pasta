@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CopyPasta's entitlements, signed into the app by build.sh. They only matter under the
+  hardened runtime (release builds, required for notarization), which blocks these
+  resources unless entitled. Not sandboxed.
+
+  Not needed, as of this writing: Accessibility (posting ⌘V, watching ⌘C) and Screen Recording
+  (dictation's screenshot) are privacy permissions the user grants, not entitlements; nothing
+  sends Apple Events (add com.apple.security.automation.apple-events if that changes, or they
+  fail silently); Sparkle.framework is re-signed with CopyPasta's identity, so library
+  validation stays on.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Dictation records from the microphone. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

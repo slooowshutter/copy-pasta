@@ -1,0 +1,231 @@
+# Implementation verification
+
+Dictation started as the SuperSamuel app and is now part of CopyPasta. The entries
+from before November 2026 describe SuperSamuel builds; their commands are updated
+to run from the root of this repo.
+
+## Joined CopyPasta (November 21, 2026)
+
+Dictation now runs inside CopyPasta: ⌥Space, one menu bar icon, and a Dictation
+pane in CopyPasta's Settings. The default cleanup model is now
+`google/gemma-4-31b-it:nitro`, with no provider pin and thinking disabled:
+OpenRouter returned 404 for the previous default, `google/gemma-4-31b-it` pinned
+to `cerebras/fp16`, because Cerebras no longer serves it. The `:nitro` variant
+answered in 0.2–0.4 s with clean output when it was measured for CopyPasta's Copy
+Tricks. A saved copy of the old default moves to the new one once; any other
+saved model is kept.
+
+`swift test` ran **90 tests**: 88 passed and the two paid API checks were skipped,
+with no failures. SuperSamuel's Keychain tests were replaced by tests of
+CopyPasta's private key files, which dictation shares with Copy Tricks.
+`CopyPasta --check-dictation-import` checks the one-time copy of SuperSamuel's
+settings, unsent recordings and transcript history.
+
+## Gemma cleanup (September 7, 2026)
+
+Version **1.3.7** changes optional text cleanup to `google/gemma-4-31b-it`, pinned
+to OpenRouter's `cerebras/fp16` endpoint with thinking disabled. The updated prompt
+explicitly preserves identifiers, negation, corrections, and mixed languages,
+and treats dictated questions/commands as text to edit. Saved Gemini 3.8 cleanup
+settings migrate once; later model choices and existing custom prompts persist.
+
+The Swift suite passed **85 tests**, with the two paid API checks skipped and no
+failures. Coverage includes Cerebras routing without provider fallback, disabled
+reasoning, separation of reasoning from pasted content, and one-time settings
+migration. The release build and whitespace checks passed.
+
+An explicitly enabled API check ran the actual Swift service against six
+synthetic text cases using the app's exact default prompt and request settings.
+All resolved to **Cerebras** and matched the expected output exactly:
+
+| Case | Complete cleanup request | Output tokens |
+| --- | ---: | ---: |
+| Fillers, duplicate words, build identifier, decimal | 0.436 s | 22 |
+| Explicit day correction and uncertainty | 0.307 s | 10 |
+| Dictated question and unfamiliar product names | 0.353 s | 23 |
+| French/English, negation, timeout, build identifier | 0.240 s | 30 |
+| Deliberate repetition, negation, API path, alternative | 0.328 s | 25 |
+| Twelve paragraphs with distinct identifiers and quantities | 1.085 s | 714 |
+
+An earlier five-case smoke run also passed, with requests taking 0.225–0.740 s.
+These are synthetic observations, including request startup and full response
+generation, not percentile estimates or Stop-to-paste measurements. They do not
+establish fidelity across real dictation. No private recordings or transcripts
+were uploaded. The local detailed log is `.context/gemma-cleanup-live-check.log`.
+
+To rerun the paid synthetic check with an explicitly supplied API key:
+
+```bash
+COPYPASTA_GEMMA_LIVE_TEST=1 swift test \
+  --filter OpenRouterServiceTests/testGemmaCleanupWithSyntheticTextWhenExplicitlyEnabled
+```
+
+It requires `OPENROUTER_API_KEY` in the environment. The test does not read the
+app's stored credentials or request Keychain access. Ordinary test runs skip it.
+
+Version **1.3.7** was installed and relaunched from
+`~/Applications/SuperSamuel.app` after the active recording finished. The saved
+cleanup model is now `google/gemma-4-31b-it`, cleanup remains enabled, and no
+custom prompt overrides the new default. The installed executable's UUID matches
+the release build (`5A3FC6BD-5CDF-3226-BD40-DD7A89018763`), and its code signature
+verifies with the existing bundle identifier. The previous bundle is saved in
+`.context/before-gemma/`. Automated UI inspection timed out; installation and
+settings were verified through the running process, signed bundle, and saved
+preferences. A real microphone-to-paste check remains for normal use.
+
+## Current PR state (September 5, 2026)
+
+The current implementation uses faithful live recognition with the personal
+dictionary and optional screenshot context, followed by optional text cleanup
+using the complete prompt shown in Settings. Oversized live context is limited
+to 1,024 Unicode scalars without automatically requesting a second transcription.
+Legacy recordings explicitly marked as requiring saved-audio finalization still
+respect that flag. The earlier long-instructions investigation below records a
+previous implementation and does not describe the current default flow.
+
+The final Swift suite ran 82 tests with one paid API test skipped and no failures.
+All 11 Python benchmark tests passed using the declared dependencies; the release
+build and `git diff --check` also passed.
+Settings coverage includes scrolling over plain and secure fields, unfocused
+editors, focused editor boundaries, short editors, and disabled editors.
+Credential coverage includes opt-in local migration, fresh-instance reads,
+owner-only file permissions, failed migration, and clearing a key without
+restoring the old Keychain backup. Local storage remains opt-in and unencrypted.
+The historical API measurements below predate these final changes; no live API
+requests or screen controls were used for the PR verification.
+
+## Initial verification
+
+Verified on September 4, 2026. The native Swift architecture and durable AAC
+recording path are retained.
+
+## Deployed API compatibility
+
+The authenticated OpenAI WebSocket rejected `gpt-live-transcribe` with
+`server_vad` and `silence_duration_ms: 500` for every requested delay, reporting
+that turn detection is unsupported for this model. It accepted all five delays
+with `turn_detection: null`. An invalid delay was rejected and the response
+enumerated exactly `minimal`, `low`, `medium`, `high`, and `xhigh`.
+
+SuperSamuel therefore detects a 500 ms pause locally in PCM energy windows and
+explicitly commits. All captured samples are streamed. This detector uses energy
+and hysteresis; it is not equivalent to OpenAI's server speech classifier and
+still needs noisy/quiet microphone evaluation. Stop commits remaining audio and
+waits for all turns. A nonempty residual shorter than the API's 100 ms minimum is
+padded with silence so its real samples are retained.
+
+The deployed API also confirmed a 1,024-character prompt limit. Oversized live
+instructions or screenshot context now keep live preview running with a short
+general prompt and the dictionary. The saved audio is finalized with the full
+original instructions after Stop, and this mode is shown in the overlay.
+Invalid keyword characters are rejected locally. Official
+documentation does not specify a numeric keyword count or length limit; no
+unverified limit or silent truncation is imposed.
+
+The [Realtime transcription guide](https://developers.openai.com/api/docs/guides/realtime-transcription)
+documents the live model, keywords, and delay presets. The shared
+[generated API reference](https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets/methods/create)
+has conflicting model/VAD wording, so the deployed probes determined the
+configuration used here.
+
+## Measured synthetic smoke test
+
+The actual Swift service streamed a locally generated Samantha speech sample at
+real-time pace, followed by silence: “Please send the SuperSamuel update to Marc.
+We use OpenRouter for saved recordings.” Total audio length was 5.537 seconds.
+All five presets returned the exact script. A separate silence-only request
+returned no speech.
+
+| Delay | First nonempty text | Stop to final transcript |
+| --- | ---: | ---: |
+| Minimal | 0.276 s | 0.791 s |
+| Low | 0.636 s | 0.695 s |
+| Medium | 1.115 s | 0.639 s |
+| High | 1.457 s | 0.645 s |
+| X-high | 2.141 s | 0.746 s |
+
+Each number is one observation. First-text latency excludes connection setup.
+No paste was performed, so Stop-to-final is not Stop-to-paste latency. These
+results do not establish quality across human speech or fixed preset durations.
+No private recordings were uploaded for this test.
+
+The real API test is opt-in. Generate a nonprivate 24 kHz mono WAV with the script
+above, then run:
+
+```bash
+COPYPASTA_LIVE_TEST_AUDIO=/absolute/path/to/generated.wav \
+  swift test \
+  --filter RealtimeTranscriptionServiceTests/testLiveAPIWithGeneratedSpeechWhenExplicitlyEnabled
+```
+
+It requires `OPENAI_API_KEY` explicitly and makes paid API requests. The test
+runner does not read the app's Keychain entry or ask for credential access.
+It is skipped in the ordinary test suite. Set
+`COPYPASTA_LIVE_TEST_LONG_CONTEXT=1` to exercise oversized instructions.
+
+## Automated and UI checks
+
+Initial checks: 64 Swift tests passed, with the paid API test skipped during the
+ordinary suite and passed separately; all 11 Python benchmark tests passed.
+The release build and `git diff --check` completed without errors or warnings.
+
+Regression coverage includes delay persistence, dictionary validation, complete
+session updates, asynchronous turn completion/failure, Stop buffer handling,
+capture discontinuities, audio preservation, fresh retries, verified silence,
+nonblocking recovery, clipboard ownership, archive cancellation, and background
+history caching. The Python benchmark suite also passes, and the native release
+build succeeds.
+
+An isolated native settings preview verified all five picker options, persistence
+after relaunch, scrolling, dictionary trimming/deduplication, visible invalid-line
+errors, and retention of the last valid dictionary. It used separate preferences
+and credentials; the installed app was not replaced during that preview.
+
+On September 5, the full release was installed and relaunched from
+`~/Applications/SuperSamuel.app` as version **1.3.5**, with the portrait icon.
+The installed executable contains the delay picker and personal dictionary,
+and its code signature was verified. Existing preferences and recordings were
+preserved.
+
+## Long-instructions regression (September 5)
+
+Version 1.3.5 incorrectly disabled live transcription when existing instructions
+exceeded the live API's 1,024-character limit. The affected preferences contained
+1,031 characters. A new failing service test reproduced the reported warning
+before the fix. Version 1.3.6 keeps the live stream active and retains the full
+instructions for saved-audio finalization. Oversized screenshot updates also
+keep streaming; removing the screenshot does not make an earlier preview final.
+Processor coverage verifies that neither a live preview nor a cached live draft
+or final bypasses the full-instruction saved-audio request after a manifest reload.
+
+Microphone, Accessibility, and Screen Recording permission request paths were
+unchanged. The installed 1.3.5 app and the prior 1.3.4 backup had the same code
+signing designated requirement. No permission database or credentials were reset.
+The earlier transient permission prompt could not be identified from the supplied
+screenshot, which shows the context-length warning only.
+
+A new live API run for the long-context fix was skipped because credential access
+was denied with user interaction disabled. The first query-only attempt stalled
+in legacy Keychain authorization and was stopped; the subsequent process-level
+prohibition returned immediately. The test now requires an explicit environment
+credential so it cannot cause app-Keychain authorization prompts. No private
+audio was uploaded. The regression is covered with the fake WebSocket and saved
+transcription transport; the earlier synthetic API measurements above predate
+this fix.
+
+The final regression suite passed 66 tests with the paid API test skipped. The
+release build and `git diff --check` passed. Version **1.3.6** was installed and
+relaunched from `~/Applications/SuperSamuel.app`; its executable UUID matches the
+release build (`5F1CFA1E-0BE3-34BB-89A9-6427E300E9CD`) and its code signature verifies.
+The full instruction checksum, both pending recordings, and the app icon were
+verified after installation.
+
+## Remaining hardware and quality checks
+
+- Physically switch or unplug a microphone during speech and silence.
+- Test quiet/noisy speech, different microphones and accents, and long recordings.
+- Compare representative human recordings across all five presets.
+- Measure actual Stop-to-paste latency and verify paste into target applications.
+
+Simulated capture regressions and synthetic API measurements do not replace
+these checks.
