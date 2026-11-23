@@ -1,0 +1,150 @@
+# Release CopyPasta: push a tag like v1.2.0 on a commit on main.
+#   git tag -a v1.2.0 -m "What's new…" && git push origin v1.2.0
+# Tests, builds a universal app, signs it with Developer ID, notarizes and staples it, makes the
+# DMG and the Sparkle appcast (scripts/release.sh), publishes the GitHub release with both, then
+# bumps the Homebrew cask in slooowshutter/homebrew-tap. An annotated tag's message becomes the
+# release notes (on GitHub and in the update alert), otherwise GitHub's generated notes do.
+# A tag like v1.2.0-beta.1 makes a pre-release: not "latest", so neither the appcast URL nor
+# Homebrew see it.
+#
+# Secrets (repo Settings › Secrets and variables › Actions; README › Releasing has how to get them):
+#   DEVELOPER_ID_P12_BASE64     the Developer ID Application certificate + private key (.p12), base64
+#   DEVELOPER_ID_P12_PASSWORD   the .p12's password
+#   NOTARY_API_KEY_P8           App Store Connect API key, the AuthKey_XXXXXXXXXX.p8 file's contents
+#   NOTARY_API_KEY_ID           its Key ID
+#   NOTARY_API_ISSUER_ID        the Issuer ID shown above the keys list
+#   SPARKLE_PRIVATE_KEY         the Sparkle EdDSA private key (`generate_keys -x` file contents)
+#   HOMEBREW_TAP_TOKEN          fine-grained token, Contents read/write on slooowshutter/homebrew-tap
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the build number (CFBundleVersion) is the commit count
+
+      - name: Check the tag
+        run: |
+          git fetch --force --tags origin # keep annotated tags annotated
+          # Build numbers only go up along one branch: release from main.
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$TAG isn't on main. Tag a commit on main."; exit 1; }
+
+      - name: Check the toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          # Swift 6.2 (Xcode 26) or later: the macOS 26 SDK, which the Liquid Glass panel needs.
+          swift --version 2>&1 | grep -Eq 'Swift version (6\.([2-9]|[1-9][0-9])|[7-9]\.)' \
+            || { echo "::error::Needs Xcode 26 or later"; exit 1; }
+
+      - name: Test
+        run: swift test
+
+      - name: Import the Developer ID certificate
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$KEYCHAIN" -f pkcs12 \
+            -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/developer-id.p12"
+          # The intermediate certificate, for codesign to build the chain to Apple's root.
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN" || true
+          # Let codesign use the key without a prompt, and search this keychain.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          # shellcheck disable=SC2046 # the existing keychains' paths, one word each
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -m1 '"Developer ID Application: ' | awk '{print $2}')"
+          [ -n "$IDENTITY" ] || { echo "::error::No Developer ID Application identity in DEVELOPER_ID_P12_BASE64"; exit 1; }
+          echo "DEVELOPER_ID=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Write the notarization key
+        env:
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: |
+          printf '%s\n' "$NOTARY_API_KEY_P8" > "$RUNNER_TEMP/notary-key.p8"
+          echo "NOTARY_KEY_PATH=$RUNNER_TEMP/notary-key.p8" >> "$GITHUB_ENV"
+
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          if [ "$(git cat-file -t "$TAG")" = tag ] && [ -n "$(git tag -l --format='%(contents)' "$TAG" | tr -d '[:space:]')" ]; then
+            git tag -l --format='%(contents)' "$TAG" | sed '/-----BEGIN PGP SIGNATURE-----/,$d' > "$NOTES"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > "$NOTES"
+          fi
+          cat "$NOTES"
+          echo "RELEASE_NOTES=$NOTES" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, make the DMG and appcast
+        id: release
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: RELEASE_VERSION="${TAG#v}" scripts/release.sh --require-notarization
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then KIND=(--prerelease); else KIND=(--latest); fi
+          # A draft until both files are up, so …/releases/latest/download/appcast.xml (the
+          # app's feed) never belongs to a release that doesn't have it yet.
+          gh release create "$TAG" dist/CopyPasta.dmg dist/appcast.xml --draft --verify-tag \
+            --title "CopyPasta ${TAG#v}" --notes-file "$RELEASE_NOTES" "${KIND[@]}"
+          gh release edit "$TAG" --draft=false "${KIND[@]}"
+
+      - name: Update the Homebrew cask
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+          SHA256: ${{ steps.release.outputs.sha256 }}
+        run: |
+          TAP="$RUNNER_TEMP/homebrew-tap"
+          git clone --depth 1 "https://x-access-token:$TAP_TOKEN@github.com/slooowshutter/homebrew-tap.git" "$TAP"
+          mkdir -p "$TAP/Casks"
+          # This repo's cask is the template: its stanzas, this release's version and checksum.
+          sed -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA256\"/" \
+            packaging/homebrew/copypasta.rb > "$TAP/Casks/copypasta.rb"
+          grep -q "version \"$VERSION\"" "$TAP/Casks/copypasta.rb" && grep -q "sha256 \"$SHA256\"" "$TAP/Casks/copypasta.rb"
+          cd "$TAP"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/copypasta.rb
+          git diff --cached --quiet || git commit -m "copypasta $VERSION"
+          git push
+
+      - name: Clean up
+        if: always()
+        run: |
+          [ -n "${KEYCHAIN:-}" ] && security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/notary-key.p8"

@@ -3,24 +3,42 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Pastey</string>
+    <string>CopyPasta</string>
     <key>CFBundleDisplayName</key>
-    <string>Pastey</string>
+    <string>CopyPasta</string>
     <key>CFBundleIdentifier</key>
-    <string>com.marclamy.pastey</string>
+    <string>com.marclamy.copypasta</string>
     <key>CFBundleExecutable</key>
-    <string>Pastey</string>
+    <string>CopyPasta</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- Fallbacks: build.sh stamps the release tag's version and the commit count. -->
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>CopyPasta needs the microphone for dictation.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>CopyPasta needs automation access to paste dictated text.</string>
+    <!-- Sparkle self-updates (Sources/CopyPasta/Updater.swift). The feed is appcast.xml on the
+         latest GitHub release, which scripts/release.sh makes and the release workflow uploads. -->
+    <key>SUFeedURL</key>
+    <string>https://github.com/slooowshutter/copy-pasta/releases/latest/download/appcast.xml</string>
+    <!-- PLACEHOLDER until the one-time setup in README › Releasing: the public half of the
+         Sparkle key that signs updates (`generate_keys` prints it). While this placeholder is
+         here, builds don't update themselves and release.sh refuses to make a Developer ID release. -->
+    <key>SUPublicEDKey</key>
+    <string>REPLACE_WITH_SPARKLE_PUBLIC_ED_KEY</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>

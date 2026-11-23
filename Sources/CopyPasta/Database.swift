@@ -58,7 +58,7 @@ final class DB {
 
     static let supportDir: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Pastey", isDirectory: true)
+            .appendingPathComponent("CopyPasta", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
@@ -72,7 +72,7 @@ final class DB {
     private var db: OpaquePointer?
 
     private init() {
-        sqlite3_open(DB.supportDir.appendingPathComponent("pastey.db").path, &db)
+        sqlite3_open(DB.supportDir.appendingPathComponent("copypasta.db").path, &db)
         exec("PRAGMA journal_mode=WAL")
         exec("""
         CREATE TABLE IF NOT EXISTS items (
@@ -107,10 +107,15 @@ final class DB {
         // Repair board items whose ":b<board>" hash suffix an earlier text edit dropped
         // (see updateText). OR IGNORE: if the repaired hash already exists, leave the row.
         exec("UPDATE OR IGNORE items SET content_hash = content_hash || ':b' || board_id WHERE board_id IS NOT NULL AND instr(content_hash, ':b') = 0")
+        // Opening a tab reads its newest items straight from here. (Without it, finding a
+        // board's items meant reading every row's board_id, the last column, past its
+        // picture: all the thumbnails, about 100 MB with a few thousand items.)
+        exec("CREATE INDEX IF NOT EXISTS idx_items_board_created ON items(board_id, created_at DESC)")
+        createSearchIndex()
 
         // Search matches like the old in-memory filter did (localized, case-insensitive;
         // SQLite's LIKE only folds ASCII), but across all of history, not one page.
-        sqlite3_create_function_v2(db, "pastey_contains", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { ctx, _, argv in
+        sqlite3_create_function_v2(db, "copypasta_contains", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { ctx, _, argv in
             guard let haystack = sqlite3_value_text(argv?[0]), let needle = sqlite3_value_text(argv?[1]) else {
                 sqlite3_result_int(ctx, 0)
                 return
@@ -120,7 +125,47 @@ final class DB {
         }, nil, nil, nil)
     }
 
-    private func exec(_ sql: String) {
+    /// Search: a trigram index of the text and the source app's name, so any part of a word
+    /// is found without reading every item (that took 70-90 ms per keystroke with 5,000).
+    /// SQLite keeps it up to date through triggers; built from the items the first time.
+    /// Case-insensitive, like the search it replaces; queries under 3 characters scan.
+    private(set) var hasSearchIndex = false
+
+    private func createSearchIndex() {
+        var stmt: OpaquePointer?
+        sqlite3_prepare_v2(db, "SELECT 1 FROM sqlite_master WHERE name = 'items_fts'", -1, &stmt, nil)
+        let existed = sqlite3_step(stmt) == SQLITE_ROW
+        sqlite3_finalize(stmt)
+        let sql = """
+        CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
+            plain_text, source_app_name, content='items', content_rowid='id', tokenize='trigram');
+        CREATE TRIGGER IF NOT EXISTS items_fts_insert AFTER INSERT ON items BEGIN
+            INSERT INTO items_fts(rowid, plain_text, source_app_name) VALUES (new.id, new.plain_text, new.source_app_name);
+        END;
+        CREATE TRIGGER IF NOT EXISTS items_fts_delete AFTER DELETE ON items BEGIN
+            INSERT INTO items_fts(items_fts, rowid, plain_text, source_app_name)
+            VALUES ('delete', old.id, old.plain_text, old.source_app_name);
+        END;
+        CREATE TRIGGER IF NOT EXISTS items_fts_update AFTER UPDATE OF plain_text, source_app_name ON items BEGIN
+            INSERT INTO items_fts(items_fts, rowid, plain_text, source_app_name)
+            VALUES ('delete', old.id, old.plain_text, old.source_app_name);
+            INSERT INTO items_fts(rowid, plain_text, source_app_name) VALUES (new.id, new.plain_text, new.source_app_name);
+        END;
+        """
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            plog("search index unavailable: \(String(cString: sqlite3_errmsg(db)))")   // search scans instead
+            return
+        }
+        if !existed { exec("INSERT INTO items_fts(items_fts) VALUES ('rebuild')") }
+        hasSearchIndex = true
+    }
+
+    /// The query as one FTS phrase: matches it anywhere in the text, quotes and all.
+    static func searchPhrase(_ query: String) -> String {
+        "\"" + query.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    func exec(_ sql: String) {
         sqlite3_exec(db, sql, nil, nil, nil)
     }
 
@@ -155,10 +200,10 @@ final class DB {
                            source_bundle_id, source_app_name, content_hash, char_count, pixel_w, pixel_h, board_id)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(content_hash) DO UPDATE SET
-            created_at = excluded.created_at,
-            source_bundle_id = excluded.source_bundle_id,
-            source_app_name = excluded.source_app_name
-        """
+            created_at = MAX(created_at, excluded.created_at),
+            source_bundle_id = CASE WHEN excluded.created_at >= created_at THEN excluded.source_bundle_id ELSE source_bundle_id END,
+            source_app_name = CASE WHEN excluded.created_at >= created_at THEN excluded.source_app_name ELSE source_app_name END
+        """   // (a copy now is always the newest; an older one, from PasteImport, mustn't move an item back)
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -215,8 +260,11 @@ final class DB {
     /// A non-empty `query` filters every row (text or source app), not just one page.
     func recent(boardID: Int64? = nil, matching query: String = "", limit: Int = 200, offset: Int = 0) -> [ClipItem] {
         var conditions = [boardID == nil ? "board_id IS NULL" : "board_id = ?"]
-        if !query.isEmpty {
-            conditions.append("(pastey_contains(plain_text, ?) OR pastey_contains(source_app_name, ?))")
+        let indexed = hasSearchIndex && query.count >= 3   // trigrams: 3 characters at least
+        if indexed {
+            conditions.append("id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)")
+        } else if !query.isEmpty {
+            conditions.append("(copypasta_contains(plain_text, ?) OR copypasta_contains(source_app_name, ?))")
         }
         let sql = """
         SELECT id, created_at, kind, plain_text, rtf, html, image_path, thumb, file_paths,
@@ -232,7 +280,10 @@ final class DB {
             sqlite3_bind_int64(stmt, idx, boardID)
             idx += 1
         }
-        if !query.isEmpty {
+        if indexed {
+            bind(stmt, idx, Self.searchPhrase(query))
+            idx += 1
+        } else if !query.isEmpty {
             bind(stmt, idx, query)
             bind(stmt, idx + 1, query)
             idx += 2
@@ -486,17 +537,92 @@ final class DB {
             if !urls.isEmpty { pb.writeObjects(urls) }
         }
     }
+
+    /// Several items at once. The texts (and links) join into one, in order, separated
+    /// by blank lines, since an app reads a single text off the clipboard. Images and
+    /// files ride along as one file each, the way Finder copies several files: an app
+    /// that takes both (Slack, Mail, a browser) inserts the text and attaches the files.
+    func copyToPasteboard(_ items: [ClipItem]) {
+        let texts = items.filter { $0.kind == .text || $0.kind == .link }.compactMap(\.plainText)
+        var entries: [NSPasteboardItem] = []
+        if !texts.isEmpty {
+            let entry = NSPasteboardItem()
+            entry.setString(texts.joined(separator: "\n\n"), forType: .string)
+            entries.append(entry)
+        }
+        for item in items {
+            switch item.kind {
+            case .text, .link: break
+            case .image: if let url = exportedImageURL(item) { entries.append(Self.fileEntry(url)) }
+            case .file: entries += item.filePaths.map { Self.fileEntry(URL(fileURLWithPath: $0)) }
+            }
+        }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects(entries)
+    }
+
+    private static func fileEntry(_ url: URL) -> NSPasteboardItem {
+        let entry = NSPasteboardItem()
+        entry.setString(url.absoluteString, forType: .fileURL)
+        return entry
+    }
+
+    /// What a card carries when dragged out of the panel.
+    func itemProvider(for item: ClipItem) -> NSItemProvider {
+        switch item.kind {
+        case .text:
+            return NSItemProvider(object: (item.plainText ?? "") as NSString)
+        case .link:
+            let text = item.plainText ?? ""
+            let provider = NSItemProvider(object: text as NSString)
+            if let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                provider.registerObject(url as NSURL, visibility: .all)
+            }
+            return provider
+        case .image:
+            return exportedImageURL(item).map { NSItemProvider(object: $0 as NSURL) } ?? NSItemProvider()
+        case .file:
+            return item.filePaths.first.map { NSItemProvider(object: URL(fileURLWithPath: $0) as NSURL) } ?? NSItemProvider()
+        }
+    }
+
+    /// The image as a file with a readable name ("Image 2026-11-21 at 10.32.15.png"),
+    /// for pasting or dropping it as a file: the stored one is named by its hash. A hard
+    /// link in a private temp folder, so it costs no space, and Finder moving it on a
+    /// drop leaves the stored image in place.
+    func exportedImageURL(_ item: ClipItem) -> URL? {
+        guard let path = item.imagePath else { return nil }
+        let source = DB.imagesDir.appendingPathComponent(path)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CopyPasta/\(item.id)", isDirectory: true)
+        let url = dir.appendingPathComponent("Image \(Self.fileDate.string(from: item.createdAt)).png")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) { return url }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        if (try? fm.linkItem(at: source, to: url)) != nil || (try? fm.copyItem(at: source, to: url)) != nil {
+            return url
+        }
+        return fm.fileExists(atPath: source.path) ? source : nil
+    }
+
+    private static let fileDate: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        return f
+    }()
 }
 
 func sha256(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
-/// Lightweight diagnostic log at ~/Library/Application Support/Pastey/pastey.log.
+/// Lightweight diagnostic log at ~/Library/Application Support/CopyPasta/copypasta.log.
 func plog(_ msg: String) {
     let line = "\(ISO8601DateFormatter().string(from: Date()))  \(msg)\n"
     guard let data = line.data(using: .utf8) else { return }
-    let url = DB.supportDir.appendingPathComponent("pastey.log")
+    let url = DB.supportDir.appendingPathComponent("copypasta.log")
     if let handle = try? FileHandle(forWritingTo: url) {
         handle.seekToEndOfFile()
         handle.write(data)

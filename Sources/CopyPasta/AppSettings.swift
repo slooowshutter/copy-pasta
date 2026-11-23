@@ -64,6 +64,13 @@ final class AppSettings: ObservableObject {
     /// Enter / double-click pastes into the frontmost app (needs Accessibility), not just copies.
     @Published var pasteDirectly: Bool { didSet { d.set(pasteDirectly, forKey: Keys.pasteDirectly) } }
     @Published var glassStyle: GlassStyle { didSet { d.set(glassStyle.rawValue, forKey: Keys.glassStyle) } }
+    /// Hold ⌘ and tap C twice: translate (French ↔ English). Three times: fix typos.
+    @Published var translateOnDoubleCopy: Bool { didSet { d.set(translateOnDoubleCopy, forKey: Keys.translate) } }
+    @Published var fixTyposOnTripleCopy: Bool { didSet { d.set(fixTyposOnTripleCopy, forKey: Keys.fixTypos) } }
+    /// OpenRouter model for both. ":nitro" routes to the fastest provider serving it;
+    /// Gemma 4 31B answered in 0.2–0.4s in testing (Nov 2026), translations and fixes clean.
+    @Published var textModel: String { didSet { d.set(textModel, forKey: Keys.textModel) } }
+    static let defaultTextModel = "google/gemma-4-31b-it:nitro"
     @Published var keepHistory: KeepHistory { didSet {
         d.set(keepHistory.rawValue, forKey: Keys.keepHistory)
         if keepHistory != oldValue { DB.shared.pruneHistory(olderThan: keepHistory.seconds) }
@@ -94,6 +101,9 @@ final class AppSettings: ObservableObject {
         static let keyCode = "shortcutKeyCode"
         static let modifiers = "shortcutModifiers"
         static let keyLabel = "shortcutKeyLabel"
+        static let translate = "translateOnDoubleCopy"
+        static let fixTypos = "fixTyposOnTripleCopy"
+        static let textModel = "textModel"
     }
 
     private init() {
@@ -106,6 +116,9 @@ final class AppSettings: ObservableObject {
             Keys.keyCode: Int(Self.defaultKeyCode),
             Keys.modifiers: Int(Self.defaultModifiers),
             Keys.keyLabel: Self.defaultLabel,
+            Keys.translate: true,
+            Keys.fixTypos: true,
+            Keys.textModel: Self.defaultTextModel,
         ])
         // Login item's real source of truth is the system; reflect actual state.
         openAtLogin = (SMAppService.mainApp.status == .enabled)
@@ -117,10 +130,25 @@ final class AppSettings: ObservableObject {
         shortcutKeyCode = UInt32(d.integer(forKey: Keys.keyCode))
         shortcutModifiers = UInt32(d.integer(forKey: Keys.modifiers))
         shortcutKeyLabel = d.string(forKey: Keys.keyLabel) ?? Self.defaultLabel
+        translateOnDoubleCopy = d.bool(forKey: Keys.translate)
+        fixTyposOnTripleCopy = d.bool(forKey: Keys.fixTypos)
+        textModel = d.string(forKey: Keys.textModel) ?? Self.defaultTextModel
+    }
+
+    // MARK: OpenRouter key
+
+    /// The OpenRouter API key (⌘C-C, ⌘C-C-C, dictation), in a private file. Dictation's
+    /// SettingsStore reads and writes the same one.
+    var openRouterKey: String? {
+        get { SharedAPIKey.openRouter.read() }
+        set {
+            objectWillChange.send()
+            try? SharedAPIKey.openRouter.write(newValue ?? "")
+        }
     }
 
     /// Saves and registers a new shortcut. If another app already holds the combo, keeps
-    /// the current one instead (rather than leave Pastey with no shortcut at all), sets
+    /// the current one instead (rather than leave CopyPasta with no shortcut at all), sets
     /// `rejectedShortcut`, and returns false.
     @discardableResult
     func setShortcut(keyCode: UInt32, modifiers: UInt32, label: String) -> Bool {
@@ -157,6 +185,49 @@ final class AppSettings: ObservableObject {
         } catch {
             plog("login item toggle failed: \(error)")
         }
+    }
+}
+
+/// An API key CopyPasta's features share (Copy Tricks and dictation use the same OpenRouter
+/// key), in a private 0600 file under Application Support/CopyPasta/Credentials rather than
+/// the Keychain: an ad-hoc signed app would hit a Keychain prompt after every rebuild.
+/// If CopyPasta never had the key, the first read brings SuperSamuel's over (SuperSamuel
+/// was the dictation app CopyPasta absorbed). A key the user cleared stays cleared.
+struct SharedAPIKey {
+    let store: CredentialStore
+    /// Where SuperSamuel kept the same key; nil imports nothing (tests).
+    let superSamuel: CredentialStore?
+
+    static let openRouter = SharedAPIKey(account: "openrouter-api-key")
+    static let openAI = SharedAPIKey(account: "openai-api-key")
+
+    init(account: String) {
+        self.init(
+            store: CredentialStore(account: account),
+            superSamuel: CredentialStore(
+                service: SuperSamuelImport.bundleID, account: account,
+                localDirectory: SuperSamuelImport.supportDirectory
+                    .appendingPathComponent("Credentials", isDirectory: true)))
+    }
+
+    init(store: CredentialStore, superSamuel: CredentialStore? = nil) {
+        self.store = store
+        self.superSamuel = superSamuel
+    }
+
+    func read() -> String? {
+        if let key = store.readAPIKey(useLocalStorage: true), !key.isEmpty { return key }
+        guard !store.hasLocalAPIKeyFile,
+              let key = superSamuel?.readAPIKey(useLocalStorage: true)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !key.isEmpty else { return nil }
+        try? store.writeAPIKey(key, useLocalStorage: true)
+        return key
+    }
+
+    /// An empty key clears it.
+    func write(_ key: String) throws {
+        try store.writeAPIKey(key.trimmingCharacters(in: .whitespacesAndNewlines), useLocalStorage: true)
     }
 }
 

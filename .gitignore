@@ -1,3 +1,11 @@
 .build/
 dist/
 .DS_Store
+__pycache__/
+*.py[cod]
+
+# Signing secrets (README › Releasing): keep them out of git
+*.p12
+*.p8
+*.cer
+sparkle_private_key*
