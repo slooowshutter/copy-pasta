@@ -119,7 +119,7 @@ struct DictationIslandView: View {
                 if let icon = state.targetIcon {
                     Image(nsImage: icon).resizable().interpolation(.high).frame(width: 22, height: 22)
                 }
-                RoundButton(symbol: "stop.fill", help: "Finish (\(HotkeyService.glyphs))", tint: Self.recRed, action: actions.stop)
+                RoundButton(symbol: "stop.fill", help: "Finish (\(AppSettings.shared.shortcut(.dictation).glyphs))", tint: Self.recRed, action: actions.stop)
             case .transcribing:
                 Spinner(size: 14)
                 Text(state.processingMessage ?? "Transcribing…").font(.system(size: 13, weight: .semibold)).lineLimit(1)

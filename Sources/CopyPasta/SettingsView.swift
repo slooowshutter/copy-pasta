@@ -279,7 +279,7 @@ private struct DictationPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text("Press \(HotkeyService.glyphs) in any app to start dictating, and again to stop. CopyPasta transcribes what you said and pastes it where you were. Each recording is saved first, so if a transcription fails you can retry it from the panel's Recordings tab.")
+            Text("Press \(AppSettings.shared.shortcut(.dictation).glyphs) in any app to start dictating, and again to stop. CopyPasta transcribes what you said and pastes it where you were. Each recording is saved first, so if a transcription fails you can retry it from the panel's Recordings tab.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -721,32 +721,26 @@ private struct ShortcutsPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Card {
-                SettingRow(title: "Activate CopyPasta") {
-                    ShortcutRecorder().frame(width: 110, height: 22)
-                }
+                shortcutRow(.activate)
                 RowDivider()
                 SettingRow(title: "Edit Text") {
                     StaticShortcut(glyphs: "⌘E")
                 }
                 RowDivider()
-                SettingRow(title: "Start / Stop Dictation") {
-                    StaticShortcut(glyphs: HotkeyService.glyphs)
-                }
+                shortcutRow(.dictation)
             }
 
-            if let rejected = settings.rejectedShortcut, rejected != settings.shortcutGlyphs {
-                warning("\(rejected) is already used by another app, so CopyPasta kept \(settings.shortcutGlyphs). Record a different shortcut, or quit that app first.")
+            if let error = settings.shortcutError {
+                warning(error)
             }
-            if settings.shortcutUnavailable {
-                warning("\(settings.shortcutGlyphs) is already used by another app (Paste, Maccy, …), so it won't open CopyPasta. Quit that app or record a different shortcut.")
+            ForEach(ShortcutAction.allCases.filter(settings.unavailableShortcuts.contains), id: \.self) { action in
+                warning("\(settings.shortcut(action).glyphs) is already used by another app, so \(action.title) won't work. Quit that app, or record a different shortcut.")
             }
 
-            Text("Activate CopyPasta is rebindable — click the field, then press the keys you want (needs a modifier; esc cancels). Edit Text (⌘E) works on the selected item while the panel is open. Dictation (\(HotkeyService.glyphs)) works in any app.")
+            Text("Click a shortcut, then press the keys you want; esc cancels. Edit Text (⌘E) works on the selected item while the panel is open. Dictation works in any app.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-
-            Button("Reset to Default (\(AppSettings.defaultGlyphs))") { settings.resetShortcut() }
 
             VStack(alignment: .leading, spacing: 7) {
                 SectionLabel(text: "Copy Tricks")
@@ -780,6 +774,23 @@ private struct ShortcutsPane: View {
         }
     }
 
+    /// A rebindable shortcut, with a reset button once it's been changed.
+    private func shortcutRow(_ action: ShortcutAction) -> some View {
+        SettingRow(title: action.title) {
+            let standard = action.defaultShortcut
+            if settings.shortcut(action) != standard {
+                Button { settings.setShortcut(standard, for: action) } label: {
+                    Image(systemName: "arrow.counterclockwise").font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Reset to \(standard.glyphs)")
+                .accessibilityLabel("Reset \(action.title) to \(standard.glyphs)")
+            }
+            ShortcutRecorder(action: action).frame(width: 110, height: 22)
+        }
+    }
+
     private func warning(_ text: String) -> some View {
         Label(text, systemImage: "exclamationmark.triangle.fill")
             .font(.system(size: 11.5))
@@ -803,17 +814,25 @@ private struct StaticShortcut: View {
 // MARK: - Shortcut recorder
 
 struct ShortcutRecorder: NSViewRepresentable {
-    func makeNSView(context: Context) -> RecorderView { RecorderView() }
+    let action: ShortcutAction
+    func makeNSView(context: Context) -> RecorderView { RecorderView(action: action) }
     func updateNSView(_ nsView: RecorderView, context: Context) { nsView.refresh() }
 }
 
+/// Click it, then press the new shortcut; esc or a click elsewhere cancels. CopyPasta's
+/// hotkeys are paused meanwhile, so their current keys can be pressed too.
 final class RecorderView: NSView {
+    private let action: ShortcutAction
     private let label = NSTextField(labelWithString: "")
-    private var monitor: Any?
-    private var recording = false { didSet { refresh() } }
+    private var recording = false
+    /// Modifiers held while recording, shown until a key completes the shortcut.
+    private var held: UInt32 = 0
+    private var monitors: [Any] = []
+    private var resignKeyObserver: NSObjectProtocol?
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
+    init(action: ShortcutAction) {
+        self.action = action
+        super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
         layer?.borderWidth = 1
@@ -826,77 +845,128 @@ final class RecorderView: NSView {
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("\(action.title) shortcut")
         refresh()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) unused") }
 
+    deinit { stopRecording() }
+
+    // Recording starts on a click (or Space / Return once tabbed to), not on focus: a window
+    // can hand its first responder to this view by itself, and must not start a recording.
     override var acceptsFirstResponder: Bool { true }
-    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self) }
+    override func mouseDown(with event: NSEvent) { startRecording() }
+    override func accessibilityPerformPress() -> Bool { startRecording(); return true }
+    override func keyDown(with event: NSEvent) {
+        if [kVK_Space, kVK_Return].contains(Int(event.keyCode)) { startRecording() } else { super.keyDown(with: event) }
+    }
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill() }
 
-    // A local key-down monitor is the reliable way to capture inside a SwiftUI-hosted
-    // view: it sees every key-down (incl. ⌘ combos, which would otherwise fire as
-    // key equivalents / paste) BEFORE dispatch, and returning nil consumes them so
-    // nothing leaks to whatever app is frontmost while recording.
-    override func becomeFirstResponder() -> Bool {
+    // However recording ends (another view takes focus, the pane changes, the window closes or
+    // goes to the background), it ends here, so the hotkeys never stay paused.
+    override func resignFirstResponder() -> Bool { stopRecording(); return true }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        stopRecording()
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func startRecording() {
+        guard !recording, let window, window.makeFirstResponder(self) else { return }
         recording = true
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+        held = 0
+        AppSettings.shared.shortcutError = nil
+        HotKey.isPaused = true
+        // A local monitor sees each key press in CopyPasta before it's dispatched (⌘ combos
+        // included, which would otherwise run menu commands); returning nil swallows it.
+        if let keys = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged], handler: { [weak self] event in
             guard let self, self.recording else { return event }
-            self.record(event)
-            return nil
-        }
-        return true
+            if event.type == .flagsChanged {
+                self.held = carbonModifiers(event.modifierFlags)
+                self.refresh()
+                return nil
+            }
+            return self.record(event) ? nil : event
+        }) { monitors.append(keys) }
+        if let clicks = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] event in
+            if let self, event.window !== self.window || !self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
+                self.cancel()
+            }
+            return event
+        }) { monitors.append(clicks) }
+        resignKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in self?.cancel() }
+        refresh()
     }
 
-    override func resignFirstResponder() -> Bool {
-        stopMonitor()
+    private func stopRecording() {
+        guard recording else { return }
         recording = false
-        return true
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors = []
+        if let resignKeyObserver { NotificationCenter.default.removeObserver(resignKeyObserver) }
+        resignKeyObserver = nil
+        HotKey.isPaused = false
+        refresh()
     }
 
-    private func stopMonitor() {
-        if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+    private func cancel() {
+        if window?.firstResponder === self { window?.makeFirstResponder(nil) }
+        stopRecording()
     }
 
-    deinit { stopMonitor() }
-
-    private func record(_ event: NSEvent) {
-        if Int(event.keyCode) == kVK_Escape {          // cancel, keep current
-            window?.makeFirstResponder(nil)
-            return
+    /// False: not taken as a shortcut, and the key press goes on to do what it normally does.
+    private func record(_ event: NSEvent) -> Bool {
+        let settings = AppSettings.shared
+        if Int(event.keyCode) == kVK_Escape { settings.shortcutError = nil; cancel(); return true }
+        let shortcut = Shortcut(keyCode: UInt32(event.keyCode),
+                                modifiers: carbonModifiers(event.modifierFlags),
+                                label: keyLabel(for: event))
+        let problem = shortcut.problem(as: action, among: settings.shortcuts)
+        if shortcut.modifiers == UInt32(cmdKey) { // the app's own commands: ⌘W closes the window…
+            settings.shortcutError = problem
+            cancel()
+            return false
         }
-        let modifiers = carbonModifiers(event.modifierFlags)
-        guard modifiers != 0 else { NSSound.beep(); return }   // ignore bare keys, stay recording
-        let saved = AppSettings.shared.setShortcut(
-            keyCode: UInt32(event.keyCode),
-            modifiers: modifiers,
-            label: keyLabel(for: event)
-        )
-        if !saved { NSSound.beep() }   // another app holds it; Settings says so
-        window?.makeFirstResponder(nil)
+        if let problem {
+            settings.shortcutError = problem // say why, and keep listening for another
+            NSSound.beep()
+            return true
+        }
+        cancel() // hotkeys back first, so the new one is checked against the others in place
+        if !settings.setShortcut(shortcut, for: action) { NSSound.beep() } // Settings says why
+        return true
     }
 
     func refresh() {
+        let glyphs = AppSettings.shared.shortcut(action).glyphs
         layer?.borderColor = (recording ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.15)).cgColor
-        label.stringValue = recording ? "Type shortcut…" : AppSettings.shared.shortcutGlyphs
-        label.textColor = recording ? .secondaryLabelColor : .labelColor
-    }
-
-    private func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
-        var c: UInt32 = 0
-        if flags.contains(.command) { c |= UInt32(cmdKey) }
-        if flags.contains(.option)  { c |= UInt32(optionKey) }
-        if flags.contains(.control) { c |= UInt32(controlKey) }
-        if flags.contains(.shift)   { c |= UInt32(shiftKey) }
-        return c
+        label.stringValue = !recording ? glyphs : held == 0 ? "Type shortcut…" : modifierGlyphs(held)
+        label.textColor = recording && held == 0 ? .secondaryLabelColor : .labelColor
+        setAccessibilityValue(recording ? "Type shortcut" : glyphs)
     }
 
     private func keyLabel(for event: NSEvent) -> String {
         if let special = specialKeyNames[UInt32(event.keyCode)] { return special }
-        if let ch = event.charactersIgnoringModifiers,
-           let scalar = ch.unicodeScalars.first, scalar.value >= 0x20 {
+        // The key on its own, as the layout types it: ⇧⌘1 is "1", not "!".
+        if let ch = event.characters(byApplyingModifiers: []),
+           let scalar = ch.unicodeScalars.first,
+           scalar.value >= 0x20, !(0xF700...0xF8FF).contains(scalar.value) { // not a function-key code
             return ch.uppercased()
         }
         return "key\(event.keyCode)"
     }
+}
+
+private func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
+    var c: UInt32 = 0
+    if flags.contains(.command) { c |= UInt32(cmdKey) }
+    if flags.contains(.option)  { c |= UInt32(optionKey) }
+    if flags.contains(.control) { c |= UInt32(controlKey) }
+    if flags.contains(.shift)   { c |= UInt32(shiftKey) }
+    return c
 }

@@ -13,7 +13,7 @@ final class AppState: ObservableObject {
     @Published var phase: DictationPhase = .idle
     @Published var elapsedSeconds: TimeInterval = 0
     @Published var waveformSamples: [CGFloat] = Array(repeating: 0, count: 96)
-    @Published var transcriptText = "Press \(HotkeyService.glyphs) to start dictation."
+    @Published var transcriptText = "Press \(AppSettings.shared.shortcut(.dictation).glyphs) to start dictation."
     /// `transcriptText` is a status message ("Recording locally…"), not words: the Island
     /// shows it as a note, never as the transcript.
     @Published var transcriptIsProgress = true

@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var dictationPhase: DictationPhase = .idle
     var panelController: PanelController!
     var statusItem: NSStatusItem?
-    var hotKey: HotKey?
+    var hotKeys: [ShortcutAction: HotKey] = [:]
     var pauseItem: NSMenuItem?
     var showItem: NSMenuItem?
     var updateItem: NSMenuItem?
@@ -108,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let settings = AppSettings.shared
         settings.onMenuBarChange = { [weak self] visible in self?.setMenuBarVisible(visible) }
-        settings.onShortcutChange = { [weak self] in self?.applyShortcut() ?? false }
+        settings.onShortcutChange = { [weak self] action in self?.applyShortcut(action) ?? false }
         DB.shared.pruneHistory(olderThan: settings.keepHistory.seconds) // enforce retention at launch
 
         watcher.onCapture = { [weak self] in
@@ -119,23 +119,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         copyTricks.start()
         MainActor.assumeIsolated { startDictation() } // before the status item: its menu holds dictation's items
 
-        // Default ⇧⌘V; user-rebindable in Settings › Shortcuts.
-        hotKey = HotKey(keyCode: settings.shortcutKeyCode, modifiers: settings.shortcutModifiers) { [weak self] in
-            self?.panelController.toggle()
+        // ⇧⌘V and ⌥⇧⌘Space by default; both rebindable in Settings › Shortcuts.
+        hotKeys[.activate] = HotKey { [weak self] in self?.panelController.toggle() }
+        hotKeys[.dictation] = HotKey { [weak self] in
+            MainActor.assumeIsolated { self?.dictation.toggleRecording() } // Carbon calls on the main thread
         }
-        settings.shortcutUnavailable = !(hotKey?.isRegistered ?? false)
-        if settings.shortcutUnavailable {
+        ShortcutAction.allCases.forEach { applyShortcut($0) }
+        if settings.unavailableShortcuts.contains(.activate) {
             DispatchQueue.main.async { [weak self] in self?.warnShortcutUnavailable() }
         }
-        // While another app holds the shortcut, take it back as soon as that app quits
+        // While another app holds a shortcut, take it back as soon as that app quits
         // (what the warnings tell the user to do). A beat first, for the window server to
         // release the quit app's hotkeys.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            guard AppSettings.shared.shortcutUnavailable else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self?.applyShortcut() }
+            let unavailable = AppSettings.shared.unavailableShortcuts
+            guard !unavailable.isEmpty else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { unavailable.forEach { self?.applyShortcut($0) } }
         }
 
         DistributedNotificationCenter.default().addObserver(
@@ -218,7 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Title shows the shortcut as text only — the global hotkey is registered
         // once via Carbon (HotKey). Binding it here too would double-fire toggle().
-        let show = NSMenuItem(title: "Show CopyPasta  \(AppSettings.shared.shortcutGlyphs)", action: #selector(toggleDrawer), keyEquivalent: "")
+        let show = NSMenuItem(title: "Show CopyPasta  \(AppSettings.shared.shortcut(.activate).glyphs)", action: #selector(toggleDrawer), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
         showItem = show
@@ -345,13 +347,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.toolTip = updater.isEnabled ? nil : "This build doesn't update itself: it isn't a release build."
     }
 
-    /// Registers the saved shortcut; false if another app holds it.
+    /// Registers `action`'s saved shortcut; false if another app holds it.
     @discardableResult
-    func applyShortcut() -> Bool {
+    func applyShortcut(_ action: ShortcutAction) -> Bool {
         let s = AppSettings.shared
-        let registered = hotKey?.update(keyCode: s.shortcutKeyCode, modifiers: s.shortcutModifiers) ?? false
-        s.shortcutUnavailable = !registered
-        showItem?.title = "Show CopyPasta  \(s.shortcutGlyphs)"
+        let registered = hotKeys[action]?.register(s.shortcut(action)) ?? false
+        if registered { s.unavailableShortcuts.remove(action) } else { s.unavailableShortcuts.insert(action) }
+        showItem?.title = "Show CopyPasta  \(s.shortcut(.activate).glyphs)"
         return registered
     }
 
@@ -360,7 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func warnShortcutUnavailable() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "\(AppSettings.shared.shortcutGlyphs) is already in use"
+        alert.messageText = "\(AppSettings.shared.shortcut(.activate).glyphs) is already in use"
         alert.informativeText = "Another app (Paste, Maccy, …) has this shortcut, so it won't open CopyPasta. Quit that app, or pick a different shortcut in Settings › Shortcuts."
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "OK")

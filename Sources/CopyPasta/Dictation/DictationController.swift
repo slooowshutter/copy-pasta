@@ -5,9 +5,13 @@ private struct DeliveryOptions {
     let targetApplication: NSRunningApplication?
     let autoPaste: Bool
     let restoreClipboard: Bool
+    /// Retried from its card in the panel: the card shows the progress and the transcript (⏎
+    /// pastes it from there), so no Island, and nothing pasted or put on the clipboard.
+    var inPanel = false
 }
 
-/// Dictation (SuperSamuel's engine): ⌥⇧⌘Space starts and stops a recording, which is
+/// Dictation (SuperSamuel's engine): its shortcut (⌥⇧⌘Space by default, registered by
+/// AppDelegate) calls `toggleRecording()` to start and stop a recording, which is
 /// transcribed (OpenAI Realtime live, or OpenRouter from the saved audio), optionally cleaned
 /// up, and pasted into the app you were in. AppDelegate calls `start()` / `shutdown()` and
 /// puts `menuItems` in CopyPasta's menu bar menu.
@@ -16,7 +20,6 @@ final class DictationController {
     private let appState = AppState()
     private let settings: SettingsStore
     private let permissions = PermissionsService()
-    private let hotkeyService = HotkeyService()
     private let audioCapture: AudioCaptureService
     private let realtimeAudioCapture = RealtimeAudioCaptureService()
     private let clipboard = ClipboardService()
@@ -98,14 +101,6 @@ final class DictationController {
         configureMenuBar()
         try? recordingStore.recoverInterruptedSessions()
 
-        if !hotkeyService.start(onTrigger: { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.toggleRecording()
-            }
-        }) {
-            plog("dictation: couldn't register the \(HotkeyService.glyphs) hotkey")
-        }
-
         // No "Unsent recording found" alert at launch (SuperSamuel's): unsent and failed
         // recordings wait in the panel's Recordings tab.
         refreshPersistentMenus()
@@ -126,7 +121,6 @@ final class DictationController {
         preserveActiveRecording(
             message: "Recording saved because CopyPasta quit."
         )
-        hotkeyService.stop()
         clearAttachedScreenshot()
     }
 
@@ -581,7 +575,7 @@ final class DictationController {
                 message: error.localizedDescription
             )
             refreshPersistentMenus()
-            showError(error.localizedDescription)
+            if delivery.inPanel { resetToIdle() } else { showError(error.localizedDescription) }
             return
         }
 
@@ -590,7 +584,7 @@ final class DictationController {
         processingSessionID = sessionID
         appState.setPhase(.transcribing)
         appState.setProgressMessage("Preparing saved recording...")
-        overlayController?.show()
+        if !delivery.inPanel { overlayController?.show() }
         menuBarController?.updateStatusTitle(for: .transcribing)
         refreshPersistentMenus()
 
@@ -683,8 +677,12 @@ final class DictationController {
             } else {
                 message = error.localizedDescription
                 try? recordingStore.markFailed(sessionID, message: message)
-                recoverySessionID = sessionID
-                showError(message, recoverable: true)
+                if delivery.inPanel {
+                    resetToIdle() // the card says what went wrong
+                } else {
+                    recoverySessionID = sessionID
+                    showError(message, recoverable: true)
+                }
             }
 
             activeOperationID = nil
@@ -723,18 +721,20 @@ final class DictationController {
         appState.captureStatusMessage = captureWarning
         appState.showsRecoveryActions = false
 
-        let canAutoPaste = delivery.autoPaste &&
-            permissions.hasAccessibilityPermission(prompt: false)
-        textInsertion.deliver(
-            text: transcript,
-            targetApplication: delivery.targetApplication,
-            autoPaste: canAutoPaste,
-            restoreClipboard: delivery.restoreClipboard
-        )
+        if !delivery.inPanel {
+            let canAutoPaste = delivery.autoPaste &&
+                permissions.hasAccessibilityPermission(prompt: false)
+            textInsertion.deliver(
+                text: transcript,
+                targetApplication: delivery.targetApplication,
+                autoPaste: canAutoPaste,
+                restoreClipboard: delivery.restoreClipboard
+            )
+        }
 
         appState.setPhase(.idle)
         appState.setElapsed(seconds: 0)
-        if captureWarning != nil {
+        if captureWarning != nil, !delivery.inPanel {
             overlayController?.show()
         } else {
             overlayController?.hide()
@@ -779,12 +779,15 @@ final class DictationController {
         deletePendingRecording(recoverySessionID)
     }
 
+    /// False when it can't start now (dictating or transcribing something else).
+    @discardableResult
     private func sendPendingRecording(
         _ sessionID: UUID,
-        targetApplication: NSRunningApplication? = nil
-    ) {
+        targetApplication: NSRunningApplication? = nil,
+        inPanel: Bool = false
+    ) -> Bool {
         guard !isStartingRecording, appState.phase == .idle || isErrorPhase else {
-            return
+            return false
         }
 
         errorResetTask?.cancel()
@@ -802,17 +805,23 @@ final class DictationController {
                 screenshotSourceURL: nil
             )
         } catch {
-            showError(error.localizedDescription)
-            return
+            if inPanel {
+                try? recordingStore.markFailed(sessionID, message: error.localizedDescription)
+            } else {
+                showError(error.localizedDescription)
+            }
+            return true
         }
         processSavedRecording(
             sessionID,
             delivery: DeliveryOptions(
                 targetApplication: targetApplication ?? currentPasteTarget(),
                 autoPaste: settings.autoPaste,
-                restoreClipboard: settings.restoreClipboard
+                restoreClipboard: settings.restoreClipboard,
+                inPanel: inPanel
             )
         )
+        return true
     }
 
     private func deletePendingRecording(_ sessionID: UUID) {
@@ -1317,8 +1326,9 @@ extension DictationController {
     /// What the Island shows, for the Recordings tab's live card.
     var liveState: AppState { appState }
 
-    /// Retry / Send Anyway: transcribes it again and pastes into the app in front.
-    func sendRecording(_ id: UUID) { sendPendingRecording(id) }
+    /// A card's Retry / Send Anyway: transcribes it again right in the card, panel open.
+    /// False when it can't start now (dictating or transcribing something else).
+    func retryInPanel(_ id: UUID) -> Bool { sendPendingRecording(id, inPanel: true) }
 
     func trashRecording(_ card: RecordingCard) {
         if card.archived {

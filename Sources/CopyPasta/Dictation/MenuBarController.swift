@@ -21,11 +21,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let settings: SettingsStore
 
     private let headerItem = NSMenuItem.sectionHeader(title: "Dictation")
-    private let toggleRecordingItem = NSMenuItem(
-        title: "Start Recording  \(HotkeyService.glyphs)",
-        action: nil,
-        keyEquivalent: ""
-    )
+    private let toggleRecordingItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private var phase: DictationPhase = .idle
     private let pendingRecordingsItem = NSMenuItem(
         title: "Unsent Recordings",
         action: nil,
@@ -79,15 +76,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func updateStatusTitle(for phase: DictationPhase) {
-        switch phase {
-        case .idle, .error:
-            toggleRecordingItem.title = "Start Recording  \(HotkeyService.glyphs)"
-        case .recording:
-            toggleRecordingItem.title = "Stop Recording  \(HotkeyService.glyphs)"
-        case .transcribing:
-            toggleRecordingItem.title = "Cancel Transcription  \(HotkeyService.glyphs)"
-        }
+        self.phase = phase
+        refreshToggleTitle()
         onPhaseChange?(phase)
+    }
+
+    /// Also on each menu open: the shortcut can be changed in Settings meanwhile.
+    private func refreshToggleTitle() {
+        let glyphs = AppSettings.shared.shortcut(.dictation).glyphs
+        switch phase {
+        case .idle, .error: toggleRecordingItem.title = "Start Recording  \(glyphs)"
+        case .recording:    toggleRecordingItem.title = "Stop Recording  \(glyphs)"
+        case .transcribing: toggleRecordingItem.title = "Cancel Transcription  \(glyphs)"
+        }
     }
 
     func updatePendingRecordings(_ recordings: [PendingRecordingSummary]) {
@@ -102,6 +103,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         onMenuWillOpen?()
+        refreshToggleTitle()
         refreshCheckmarks()
     }
 

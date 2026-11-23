@@ -8,7 +8,7 @@ A clipboard history manager for macOS — a [Paste.app](https://pasteapp.io) clo
 - **Configurable retention** — keep history a day, week, month, year, or forever
 - **Copy Tricks** — select text and press `⌘C` twice to translate it (French ↔ English), three times to fix its typos. The result replaces the selection and lands on the clipboard; `⌘Z` undoes it
 - **Dictation** — press `⌥⇧⌘Space` in any app, talk, press it again: CopyPasta types what you said where you were
-- **Launch at login**, rebindable shortcut, hidden dock icon
+- **Launch at login**, rebindable shortcuts, hidden dock icon
 
 CopyPasta used to be called Pastey. The first launch under the new name quits Pastey and moves its history, pinboards and settings over.
 
@@ -60,7 +60,7 @@ To keep the permission across rebuilds, sign with a certificate. `build.sh` pick
 - **Drag a card** — into another app (an image lands as a file), or onto a pinboard tab to pin it (drags the whole selection if the card is part of one)
 - **Right-click a card** — paste, copy, pin to a board, delete
 - **Click the open board** — rename it; **right-click a board** — rename, color, delete
-- **`⌥⇧⌘Space`** — start / stop dictation, in any app (`⌥Space` stays free for SuperSamuel)
+- **`⌥⇧⌘Space`** — start / stop dictation, in any app (rebindable in Settings › Shortcuts; `⌥Space` stays free for SuperSamuel)
 - **Menu bar icon** — Settings, check for updates, dictation (unsent recordings, transcript history), pause capture, quit
 
 ## Copy Tricks
@@ -84,7 +84,7 @@ Open from the menu bar icon → Settings:
 - **General** — launch at login, auto-paste (and its Accessibility status), history retention, menu bar icon visibility
 - **Copy Tricks** — turn ⌘C C / ⌘C C C on or off, OpenRouter key and model
 - **Dictation** — pasting, live transcription (OpenAI key, delay), OpenRouter key and saved-audio model, text cleanup (model, instructions), personal dictionary
-- **Shortcuts** — rebind the open/close hotkey. If another app (the real Paste, Maccy, …) already uses the shortcut, CopyPasta warns you here and at launch
+- **Shortcuts** — rebind the open/close and dictation hotkeys. If another app (the real Paste, Maccy, …) already uses one, CopyPasta warns you here (and at launch, for open/close)
 
 ## Importing from Paste.app
 
