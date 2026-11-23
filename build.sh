@@ -4,7 +4,7 @@
 #   install  copy it to /Applications (where Spotlight and Raycast find it) and launch it
 #
 # Optional environment (scripts/release.sh sets most of these for release builds):
-#   COPYPASTA_SIGN_IDENTITY        certificate to sign with (default: your Apple Development one, else ad-hoc)
+#   COPYPASTA_SIGN_IDENTITY        certificate to sign with (default: your Developer ID, else Apple Development, else ad-hoc)
 #   COPYPASTA_VERSION              CFBundleShortVersionString (default: the latest vX.Y.Z tag's,
 #                                  else Info.plist's)
 #   COPYPASTA_BUILD                CFBundleVersion, what Sparkle compares to find newer versions
@@ -57,11 +57,14 @@ rm -rf "$SPARKLE/XPCServices" "$SPARKLE/Versions/B/XPCServices"
 # README) keeps them.
 # Don't pin the requirement to the bundle identifier alone to get around this: any app
 # signed with that identifier would then inherit CopyPasta's Accessibility access.
-# None given: your own Apple Development certificate, if the keychain has a valid one (by
-# hash: two certificates can share a name). Else ad-hoc.
+# None given: a valid Developer ID Application certificate from the keychain, else an Apple
+# Development one (by hash: two certificates can share a name; revoked ones skipped). Else ad-hoc.
 if [[ -z "${COPYPASTA_SIGN_IDENTITY:-}" ]]; then
-    COPYPASTA_SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep -v REVOKED \
-        | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) "Apple Development: .*/\1/p' | head -1)"
+    IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null | grep -v -e REVOKED -e EXPIRED || true)"
+    for KIND in "Developer ID Application" "Apple Development"; do
+        COPYPASTA_SIGN_IDENTITY="$(sed -nE "s/^ *[0-9]+\) ([0-9A-F]{40}) \"$KIND: .*/\1/p" <<<"$IDENTITIES" | head -1)"
+        [[ -n "$COPYPASTA_SIGN_IDENTITY" ]] && break
+    done
 fi
 IDENTITY="${COPYPASTA_SIGN_IDENTITY:--}"
 SIGN=(codesign --force --sign "$IDENTITY")

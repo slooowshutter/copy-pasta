@@ -107,6 +107,11 @@ final class DB {
         // Repair board items whose ":b<board>" hash suffix an earlier text edit dropped
         // (see updateText). OR IGNORE: if the repaired hash already exists, leave the row.
         exec("UPDATE OR IGNORE items SET content_hash = content_hash || ':b' || board_id WHERE board_id IS NOT NULL AND instr(content_hash, ':b') = 0")
+        // Opening a tab reads its newest items straight from here. (Without it, finding a
+        // board's items meant reading every row's board_id, the last column, past its
+        // picture: all the thumbnails, about 100 MB with a few thousand items.)
+        exec("CREATE INDEX IF NOT EXISTS idx_items_board_created ON items(board_id, created_at DESC)")
+        createSearchIndex()
 
         // Search matches like the old in-memory filter did (localized, case-insensitive;
         // SQLite's LIKE only folds ASCII), but across all of history, not one page.
@@ -120,7 +125,47 @@ final class DB {
         }, nil, nil, nil)
     }
 
-    private func exec(_ sql: String) {
+    /// Search: a trigram index of the text and the source app's name, so any part of a word
+    /// is found without reading every item (that took 70-90 ms per keystroke with 5,000).
+    /// SQLite keeps it up to date through triggers; built from the items the first time.
+    /// Case-insensitive, like the search it replaces; queries under 3 characters scan.
+    private(set) var hasSearchIndex = false
+
+    private func createSearchIndex() {
+        var stmt: OpaquePointer?
+        sqlite3_prepare_v2(db, "SELECT 1 FROM sqlite_master WHERE name = 'items_fts'", -1, &stmt, nil)
+        let existed = sqlite3_step(stmt) == SQLITE_ROW
+        sqlite3_finalize(stmt)
+        let sql = """
+        CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
+            plain_text, source_app_name, content='items', content_rowid='id', tokenize='trigram');
+        CREATE TRIGGER IF NOT EXISTS items_fts_insert AFTER INSERT ON items BEGIN
+            INSERT INTO items_fts(rowid, plain_text, source_app_name) VALUES (new.id, new.plain_text, new.source_app_name);
+        END;
+        CREATE TRIGGER IF NOT EXISTS items_fts_delete AFTER DELETE ON items BEGIN
+            INSERT INTO items_fts(items_fts, rowid, plain_text, source_app_name)
+            VALUES ('delete', old.id, old.plain_text, old.source_app_name);
+        END;
+        CREATE TRIGGER IF NOT EXISTS items_fts_update AFTER UPDATE OF plain_text, source_app_name ON items BEGIN
+            INSERT INTO items_fts(items_fts, rowid, plain_text, source_app_name)
+            VALUES ('delete', old.id, old.plain_text, old.source_app_name);
+            INSERT INTO items_fts(rowid, plain_text, source_app_name) VALUES (new.id, new.plain_text, new.source_app_name);
+        END;
+        """
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            plog("search index unavailable: \(String(cString: sqlite3_errmsg(db)))")   // search scans instead
+            return
+        }
+        if !existed { exec("INSERT INTO items_fts(items_fts) VALUES ('rebuild')") }
+        hasSearchIndex = true
+    }
+
+    /// The query as one FTS phrase: matches it anywhere in the text, quotes and all.
+    static func searchPhrase(_ query: String) -> String {
+        "\"" + query.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    func exec(_ sql: String) {
         sqlite3_exec(db, sql, nil, nil, nil)
     }
 
@@ -155,10 +200,10 @@ final class DB {
                            source_bundle_id, source_app_name, content_hash, char_count, pixel_w, pixel_h, board_id)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(content_hash) DO UPDATE SET
-            created_at = excluded.created_at,
-            source_bundle_id = excluded.source_bundle_id,
-            source_app_name = excluded.source_app_name
-        """
+            created_at = MAX(created_at, excluded.created_at),
+            source_bundle_id = CASE WHEN excluded.created_at >= created_at THEN excluded.source_bundle_id ELSE source_bundle_id END,
+            source_app_name = CASE WHEN excluded.created_at >= created_at THEN excluded.source_app_name ELSE source_app_name END
+        """   // (a copy now is always the newest; an older one, from PasteImport, mustn't move an item back)
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -215,7 +260,10 @@ final class DB {
     /// A non-empty `query` filters every row (text or source app), not just one page.
     func recent(boardID: Int64? = nil, matching query: String = "", limit: Int = 200, offset: Int = 0) -> [ClipItem] {
         var conditions = [boardID == nil ? "board_id IS NULL" : "board_id = ?"]
-        if !query.isEmpty {
+        let indexed = hasSearchIndex && query.count >= 3   // trigrams: 3 characters at least
+        if indexed {
+            conditions.append("id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)")
+        } else if !query.isEmpty {
             conditions.append("(copypasta_contains(plain_text, ?) OR copypasta_contains(source_app_name, ?))")
         }
         let sql = """
@@ -232,7 +280,10 @@ final class DB {
             sqlite3_bind_int64(stmt, idx, boardID)
             idx += 1
         }
-        if !query.isEmpty {
+        if indexed {
+            bind(stmt, idx, Self.searchPhrase(query))
+            idx += 1
+        } else if !query.isEmpty {
             bind(stmt, idx, query)
             bind(stmt, idx + 1, query)
             idx += 2

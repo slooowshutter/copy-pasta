@@ -36,14 +36,7 @@ final class ClipboardWatcher {
         lastChange = pb.changeCount
         guard !isPaused else { return }
 
-        let types = Set(pb.types ?? [])
-        // Privacy: password managers mark copies as concealed/transient. Never store those.
-        if types.contains(NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
-            || types.contains(NSPasteboard.PasteboardType("org.nspasteboard.TransientType")) {
-            return
-        }
-
-        guard let content = read(pb) else { return }
+        guard !Self.isPrivate(pb.types ?? []), let content = Self.read(pb) else { return }
         let app = NSWorkspace.shared.frontmostApplication
         let copiedAt = Date()
         let finish: (Capture) -> Void = { [weak self] capture in
@@ -64,6 +57,22 @@ final class ClipboardWatcher {
         }
     }
 
+    /// Privacy: password managers mark copies as concealed/transient. Never store those.
+    static func isPrivate(_ types: [NSPasteboard.PasteboardType]) -> Bool {
+        types.contains(NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+            || types.contains(NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+    }
+
+    /// What a pasteboard's contents make, as a live copy would, image included (made
+    /// here and now: slow for a big one). For PasteImport.
+    static func capture(from pb: NSPasteboard) -> Capture? {
+        switch read(pb) {
+        case .ready(let capture): return capture
+        case .image(let raw): return imageCapture(raw)
+        case nil: return nil
+        }
+    }
+
     private func store(_ capture: Capture, at date: Date) {
         DB.shared.upsert(capture, at: date)
         DB.shared.trim()
@@ -77,7 +86,7 @@ final class ClipboardWatcher {
     // document apps (Word, Excel, Keynote…) put a rendered picture of the selection
     // next to its rich text — there the text is the content, or pasting it back
     // would give a picture. A bare link next to an image is a browser "Copy Image".
-    private func read(_ pb: NSPasteboard) -> Content? {
+    private static func read(_ pb: NSPasteboard) -> Content? {
         if let files = fileCapture(pb) { return .ready(files) }
         let text = textCapture(pb)
         guard let raw = pb.data(forType: .png) ?? pb.data(forType: .tiff) else {
@@ -89,7 +98,7 @@ final class ClipboardWatcher {
         return .image(raw)
     }
 
-    private func fileCapture(_ pb: NSPasteboard) -> Capture? {
+    private static func fileCapture(_ pb: NSPasteboard) -> Capture? {
         guard let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
               !urls.isEmpty else { return nil }
         let paths = urls.map(\.path)
@@ -103,9 +112,9 @@ final class ClipboardWatcher {
         )
     }
 
-    private func textCapture(_ pb: NSPasteboard) -> Capture? {
+    private static func textCapture(_ pb: NSPasteboard) -> Capture? {
         guard let s = pb.string(forType: .string),
-              !s.trimmingCharacters(in: Self.blank).isEmpty else { return nil }
+              !s.trimmingCharacters(in: blank).isEmpty else { return nil }
         let text = String(s.prefix(100_000)) // ponytail: cap giant copies; raise if it ever bites
         return Capture(
             kind: isLink(text) ? .link : .text,
@@ -121,7 +130,7 @@ final class ClipboardWatcher {
     /// where an inline image sits (copying just an image from Word/Pages/Notes).
     private static let blank = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FFFC}"))
 
-    private func isLink(_ s: String) -> Bool {
+    private static func isLink(_ s: String) -> Bool {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.contains(where: \.isWhitespace), let url = URL(string: t) else { return false }
         return url.scheme == "http" || url.scheme == "https"

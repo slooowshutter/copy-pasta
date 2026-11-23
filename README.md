@@ -47,7 +47,7 @@ The first time you press `Enter`, macOS asks to give CopyPasta **Accessibility**
 
 CopyPasta needs Accessibility access to paste for you (clipboard items and dictation) and to notice `⌘C` taps for Copy Tricks. macOS ties the permission to the app's code signature. Release builds keep it across updates (same Developer ID). `./build.sh` signs ad-hoc by default, and that signature changes on every build, so **each rebuild loses the permission**: remove CopyPasta from the list in System Settings › Privacy & Security › Accessibility with **−**, then grant access again. The Microphone permission for dictation is lost the same way, and macOS asks for it again at the next recording.
 
-To keep the permission across rebuilds, sign with a certificate. `build.sh` picks a valid Apple Development certificate from your keychain on its own (`security find-identity -v -p codesigning` lists yours). Without one, make a self-signed one: **Keychain Access › Certificate Assistant › Create a Certificate…**, Identity Type **Self Signed Root**, Certificate Type **Code Signing**. Then build with `COPYPASTA_SIGN_IDENTITY="<certificate name>" ./build.sh` (export it in your shell profile to make it stick).
+To keep the permission across rebuilds, sign with a certificate. `build.sh` picks a valid Developer ID Application or Apple Development certificate from your keychain on its own (`security find-identity -v -p codesigning` lists yours). Without one, make a self-signed one: **Keychain Access › Certificate Assistant › Create a Certificate…**, Identity Type **Self Signed Root**, Certificate Type **Code Signing**. Then build with `COPYPASTA_SIGN_IDENTITY="<certificate name>" ./build.sh` (export it in your shell profile to make it stick).
 
 ## Usage
 
@@ -88,7 +88,7 @@ Open from the menu bar icon → Settings:
 
 ## Importing from Paste.app
 
-Migrating off the real Paste (Setapp)? `scripts/import_paste.py` pulls your text and link history across. Text/link items only — images and encrypted payloads are skipped, and items over 500 chars import truncated (Paste caps the cleartext preview). See the script header for the exact steps.
+Moving from Paste (Setapp)? Quit CopyPasta, then run `/Applications/CopyPasta.app/Contents/MacOS/CopyPasta import-paste`: it brings your whole history and every pinboard across (rich text, images, files, links), with their names, colors and order. Paste's data is only read; running it again adds only what's new.
 
 ## Development
 

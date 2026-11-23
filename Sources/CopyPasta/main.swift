@@ -80,6 +80,12 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-panel"), i + 1 < Comma
 RenameMigration.run() // Pastey → CopyPasta, before anything opens the database or settings
 SuperSamuelImport.run() // SuperSamuel's dictation settings and data; after the rename, which may replace the folder
 
+// `CopyPasta import-paste`: Paste's history and pinboards, into CopyPasta's (quit it first).
+if CommandLine.arguments.dropFirst().first == "import-paste" {
+    NSApplication.shared.setActivationPolicy(.prohibited)   // a command: no Dock icon, no window
+    exit(PasteImport.run())
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let watcher = ClipboardWatcher()
     let copyTricks = CopyTricks()
