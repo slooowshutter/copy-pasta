@@ -20,40 +20,18 @@ final class TextInsertionService {
         clipboard.setString(text)
         let deliveryChangeCount = clipboard.changeCount
 
-        if !autoPaste {
-            return
-        }
+        guard autoPaste else { return }
 
-        pasteClipboardContents(into: targetApplication)
-
-        if let snapshot {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
-                self?.clipboard.restore(snapshot, ifUnchangedSince: deliveryChangeCount)
+        targetApplication?.activate(options: [.activateIgnoringOtherApps])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            Paster.pasteIntoFrontApp {
+                guard let snapshot else { return }
+                // Once the app has had time to read the transcript: counted from the ⌘V,
+                // which can wait for keys to be let go, not from the start.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    self?.clipboard.restore(snapshot, ifUnchangedSince: deliveryChangeCount)
+                }
             }
         }
-
-    }
-
-    func pasteClipboardContents(into targetApplication: NSRunningApplication?) {
-        targetApplication?.activate(options: [.activateIgnoringOtherApps])
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.simulateCommandV()
-        }
-    }
-
-    private func simulateCommandV() {
-        guard let source = CGEventSource(stateID: .combinedSessionState) else {
-            return
-        }
-
-        let keyCodeForV: CGKeyCode = 9
-        let down = CGEvent(keyboardEventSource: source, virtualKey: keyCodeForV, keyDown: true)
-        down?.flags = .maskCommand
-        let up = CGEvent(keyboardEventSource: source, virtualKey: keyCodeForV, keyDown: false)
-        up?.flags = .maskCommand
-
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
     }
 }

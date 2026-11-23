@@ -78,13 +78,16 @@ enum DevPreview {
     /// The Copy Tricks overlays (caret bubble, Island) in each state, on the wallpaper.
     @MainActor
     static func renderTricks(to path: String) {
+        let french = "Tu peux m'envoyer le deck avant le point de 15h ? Je veux revoir la slide des prix avec Sam."
+        let english = "Can you send me the deck before the 3pm sync? I want to go over the pricing slide with Sam."
         let fix = (before: "The bar: hover over the bar under the header and it cccc and displays a handle. Click anywhere on it to access it, or drag the handle left and right during audio playback.",
                    after: "The bar: hover over the bar under the header and it displays a handle. Click anywhere on it to access it, or drag the handle left and right during audio playback.")
-        let states: [TrickStatus] = [
-            .working(.translate, .english),
-            .done(.translate, .english, before: "Salut !", after: "Hi!", replaced: true),
-            .done(.fixTypos, nil, before: fix.before, after: fix.after, replaced: true),
-            .failed("Add your OpenRouter key in Settings › API Keys"),
+        // Each state over the selection as it is then: French while it's translated, the result after.
+        let states: [(TrickStatus, String)] = [
+            (.working(.translate, .english), french),
+            (.done(.translate, .english, before: french, after: english, replaced: true), english),
+            (.done(.fixTypos, nil, before: fix.before, after: fix.after, replaced: true), fix.after),
+            (.failed("Add your OpenRouter key in Settings › API Keys"), fix.before),
         ]
         let wallpaper = NSImage(contentsOfFile: "/System/Library/Desktop Pictures/Sonoma.heic")
         let view = ZStack {
@@ -93,8 +96,8 @@ enum DevPreview {
                 VStack(alignment: .leading, spacing: 30) {
                     ForEach(states.indices, id: \.self) { i in
                         VStack(alignment: .leading, spacing: 10) {
-                            CaretBubbleContent(status: states[i])
-                            Text(fix.before).font(.system(size: 13.5)).foregroundStyle(.white)
+                            CaretBubbleContent(status: states[i].0)
+                            Text(states[i].1).font(.system(size: 13.5)).foregroundStyle(.white)
                                 .padding(.horizontal, 6).padding(.vertical, 3)
                                 .background(Color.accentColor.opacity(0.45), in: RoundedRectangle(cornerRadius: 3))
                                 .padding(.leading, 8)
@@ -137,8 +140,8 @@ enum DevPreview {
             return CGFloat(min(1, 0.08 + 0.85 * abs(sin(t * 9.1) * sin(t * 3.7 + 1.3)) * (0.55 + 0.45 * sin(t * 0.9 + 0.4))))
         }
         let messages = NSWorkspace.shared.icon(forFile: "/System/Applications/Messages.app")
-        let wallpaper = NSWorkspace.shared.desktopImageURL(for: NSScreen.screens[0]).flatMap { NSImage(contentsOf: $0) }
-            ?? NSImage(contentsOfFile: "/System/Library/Desktop Pictures/Sonoma.heic")
+        // A stock wallpaper, not the user's own: these renders can end up in the README.
+        let wallpaper = NSImage(contentsOfFile: "/System/Library/Desktop Pictures/Sonoma.heic")
         var shot: NSImage?
         if let wallpaper { shot = wallpaper }
         let states: [(String, DictationIslandState)] = [

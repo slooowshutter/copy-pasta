@@ -14,14 +14,26 @@ enum Paster {
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
-    static func pasteIntoFrontApp() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let v = keyCodeForV()
-        for keyDown in [true, false] {
-            let event = CGEvent(keyboardEventSource: source, virtualKey: v, keyDown: keyDown)
-            event?.flags = .maskCommand
-            event?.post(tap: .cgSessionEventTap)
+    /// Types ⌘V into the frontmost app; `then` runs right after. Waits (up to a second) for
+    /// ⌥, ⇧ and ⌃ to be let go: still held from ⌥⇧⌘Space, they'd join in and make it ⌥⇧⌘V,
+    /// which most text fields ignore. (A held ⌘, as in Copy Tricks, is harmless.)
+    static func pasteIntoFrontApp(then done: (() -> Void)? = nil) {
+        whenModifiersReleased(by: Date().addingTimeInterval(1)) {
+            let source = CGEventSource(stateID: .combinedSessionState)
+            let v = keyCodeForV()
+            for keyDown in [true, false] {
+                let event = CGEvent(keyboardEventSource: source, virtualKey: v, keyDown: keyDown)
+                event?.flags = .maskCommand
+                event?.post(tap: .cgSessionEventTap)
+            }
+            done?()
         }
+    }
+
+    private static func whenModifiersReleased(by deadline: Date, _ action: @escaping () -> Void) {
+        let held = CGEventSource.flagsState(.hidSystemState).intersection([.maskAlternate, .maskShift, .maskControl])
+        guard !held.isEmpty, Date() < deadline else { return action() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { whenModifiersReleased(by: deadline, action) }
     }
 
     /// The key that types "v" with ⌘ held in the current layout — not always the ANSI
