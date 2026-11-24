@@ -1,4 +1,8 @@
-A clipboard history manager for macOS — a [Paste.app](https://pasteapp.io) clone opensource. Lives in the menu bar, remembers everything you copy, and brings it back with a keystroke.
+# CopyPasta
+
+A clipboard history manager for macOS, an open-source take on [Paste.app](https://pasteapp.io), with dictation and AI copy tricks built in. It lives in the menu bar, remembers everything you copy, and brings it back with a keystroke.
+
+![The CopyPasta panel, open over the bottom of the screen](docs/images/panel.png)
 
 - **Clipboard history** — text, links, images and files; search covers all of it
 - **Boards** — organize snippets into pinboards (Prompts, Code, Useful Links, …)
@@ -8,7 +12,8 @@ A clipboard history manager for macOS — a [Paste.app](https://pasteapp.io) clo
 - **Configurable retention** — keep history a day, week, month, year, or forever
 - **Copy Tricks** — select text and press `⌘C` twice to translate it (French ↔ English), three times to fix its typos. The result replaces the selection and lands on the clipboard; `⌘Z` undoes it
 - **Dictation** — press `⌥⇧⌘Space` in any app, talk, press it again: CopyPasta types what you said where you were
-- **Launch at login**, rebindable shortcut, hidden dock icon
+- **Recordings** — every dictation is kept in the panel's Recordings tab: paste, copy or play it again, and retry a failed one right in its card
+- **Launch at login**, rebindable shortcuts, hidden dock icon
 
 CopyPasta used to be called Pastey. The first launch under the new name quits Pastey and moves its history, pinboards and settings over.
 
@@ -51,6 +56,10 @@ To keep the permission across rebuilds, sign with a certificate. `build.sh` pick
 
 ## Usage
 
+The panel slides up from the bottom of the screen, over the Dock, without taking you out of the app you're in. Each copy is a card, colored after the app it came from: text keeps its formatting, links show their site, images their size, files their names.
+
+![Every kind of card: rich text, links, images, files, code, messages](docs/images/cards.png)
+
 - **`⇧⌘V`** — open / close the panel (rebindable in Settings › Shortcuts)
 - **Type** (or `⌘F`) — search everything in the current tab
 - **`← →`** — move between cards; **`⌘← ⌘→`** — switch tabs
@@ -60,31 +69,61 @@ To keep the permission across rebuilds, sign with a certificate. `build.sh` pick
 - **Drag a card** — into another app (an image lands as a file), or onto a pinboard tab to pin it (drags the whole selection if the card is part of one)
 - **Right-click a card** — paste, copy, pin to a board, delete
 - **Click the open board** — rename it; **right-click a board** — rename, color, delete
-- **`⌥⇧⌘Space`** — start / stop dictation, in any app (`⌥Space` stays free for SuperSamuel)
+- **Recordings tab** — your dictations, newest first (see [Dictation](#dictation))
+- **`⌥⇧⌘Space`** — start / stop dictation, in any app (rebindable in Settings › Shortcuts; `⌥Space` stays free for SuperSamuel)
 - **Menu bar icon** — Settings, check for updates, dictation (unsent recordings, transcript history), pause capture, quit
 
 ## Copy Tricks
 
-Both use [OpenRouter](https://openrouter.ai). Paste your key in **Settings › Copy Tricks** (if SuperSamuel is set up on this Mac, CopyPasta reuses its key). The default model, `google/gemma-4-31b-it:nitro`, goes to OpenRouter's fastest provider for it and answers in well under a second. The language is detected on the Mac, so the model is told which way to translate. The result replaces your selection only if you're still in the same app and text field; otherwise it's just on the clipboard.
+Select text anywhere, hold `⌘` and tap `C`:
+
+- **`⌘C C`** (twice) — translates it, French ↔ English
+- **`⌘C C C`** (three times) — fixes its typos
+
+The result replaces your selection and goes on the clipboard, and `⌘Z` in that app undoes it. A small bubble at the selection says what's happening:
+
+![Copy Tricks: translating, translated, typos fixed, and a missing key](docs/images/copy-tricks.jpg)
+
+Where the app says where its words are on screen, a typo fix is drawn right on the text for a few seconds, like Grammarly: the new words highlighted in green, the removed ones struck through above them. Elsewhere (many web apps), the bubble shows the changes instead.
+
+![A typo fix drawn on the text, in a light and a dark field](docs/images/typo-fix-on-text.png)
+
+Both use [OpenRouter](https://openrouter.ai). Paste your key in **Settings › API Keys** (if SuperSamuel is set up on this Mac, CopyPasta reuses its key), and turn each trick on or off in **Settings › Shortcuts**. The default model, `google/gemma-4-31b-it:nitro`, goes to OpenRouter's fastest provider for it and answers in well under a second. The language is detected on the Mac, so the model is told which way to translate. The result replaces your selection only if you're still in the same app and text field; otherwise it's just on the clipboard.
 
 ## Dictation
 
-Press **`⌥⇧⌘Space`** in any app and talk; press it again to stop. A small window shows the recording, and the text as you speak if live transcription is on. When you stop, CopyPasta pastes the transcript into the app you were in (it's also on the clipboard). While recording you can attach a screenshot of that app as context, so names on screen are spelled right.
+Press **`⌥⇧⌘Space`** in any app and talk; press it again to stop. The Island at the top of the screen shows the recording, and the text as you speak if live transcription is on. When you stop, CopyPasta pastes the transcript into the app you were in (it's also on the clipboard). While recording you can attach a screenshot of that app as context, so names on screen are spelled right.
 
-It needs an [OpenRouter](https://openrouter.ai) key, the same one Copy Tricks uses: paste it in **Settings › Dictation** or **Settings › Copy Tricks**. Live transcription (text while you speak) also needs an **OpenAI** key, in Settings › Dictation. Both keys stay on this Mac, in files only you can read. Optional text cleanup has a model edit the transcript (fillers, punctuation) with instructions you can change, and a personal dictionary helps with names and jargon.
+![The dictation Island: recording, words coming in, screen attached, finishing, failed](docs/images/dictation-island.jpg)
 
-Every recording is saved before it's sent, so nothing is lost when the network drops: retry it from the menu bar icon (**Unsent Recordings**). **Transcript History** keeps past transcripts with their audio. Both live in `~/Library/Application Support/CopyPasta/Dictation`.
+It needs an [OpenRouter](https://openrouter.ai) key, the same one Copy Tricks uses, and live transcription (text while you speak) also needs an **OpenAI** key: paste both in **Settings › API Keys**. Both keys stay on this Mac, in files only you can read. Optional text cleanup has a model edit the transcript (fillers, punctuation) with instructions you can change, and a personal dictionary helps with names and jargon.
+
+### Recordings
+
+Every recording is saved before it's sent, so nothing is lost when the network drops. The panel's **Recordings** tab shows them all, newest first: the one in progress (words coming in), finished transcripts (`Enter` pastes, `⌘C` copies, `Space` plays the audio), and any that failed or weren't sent, with what was kept and what went wrong.
+
+![The Recordings tab in the panel](docs/images/recordings-tab.png)
+
+A failed card's main button fixes it: **Retry** transcribes the saved audio again right in the card, with the panel still open, and the card turns into the transcript, ready to paste. **Add Key…** opens Settings when the OpenRouter key is missing; **Send Anyway** sends one that was kept without being sent (too short, or cancelled).
+
+![Every state of a recording card](docs/images/recording-cards.png)
+
+The menu bar icon has them too (**Unsent Recordings**, **Transcript History**). Recordings and transcripts live in `~/Library/Application Support/CopyPasta/Dictation`.
 
 The first recording asks for **Microphone** access. Pasting for you needs **Accessibility** (the same permission as auto-paste), and a screenshot needs **Screen Recording**.
 
 ## Settings
 
-Open from the menu bar icon → Settings:
+Open from the menu bar icon › **Settings…**, or the panel's **•••** menu:
 
-- **General** — launch at login, auto-paste (and its Accessibility status), history retention, menu bar icon visibility
-- **Copy Tricks** — turn ⌘C C / ⌘C C C on or off, OpenRouter key and model
-- **Dictation** — pasting, live transcription (OpenAI key, delay), OpenRouter key and saved-audio model, text cleanup (model, instructions), personal dictionary
-- **Shortcuts** — rebind the open/close hotkey. If another app (the real Paste, Maccy, …) already uses the shortcut, CopyPasta warns you here and at launch
+- **General** — launch at login, menu bar icon, sound effects, Liquid Glass panel background, paste into the active app or only copy (and its Accessibility status), how long to keep history
+- **Shortcuts** — rebind Activate CopyPasta and Start / Stop Dictation: click one and press the new keys (a reset arrow appears once it's changed). If another app (the real Paste, Maccy, …) already uses one, CopyPasta warns you here (and at launch, for open/close). Copy Tricks are turned on or off here too
+- **Dictation** — pasting and restoring the clipboard, live transcription (delay), saved-audio model, text cleanup (model, instructions), personal dictionary
+- **API Keys** — the OpenRouter key (Copy Tricks, dictation) and Copy Tricks' model, and the OpenAI key (live transcription)
+
+| General | Shortcuts | Dictation |
+| --- | --- | --- |
+| ![Settings › General](docs/images/settings-general.png) | ![Settings › Shortcuts](docs/images/settings-shortcuts.png) | ![Settings › Dictation](docs/images/settings-dictation.png) |
 
 ## Importing from Paste.app
 
@@ -100,12 +139,14 @@ CopyPasta --snapshot       # debug builds: render the panel to copypasta-panel.p
 CopyPasta --settings       # debug builds: open Settings and render it to copypasta-settings.png
 ```
 
-Debug builds can also render the cards and the drawer to PNGs without showing anything on screen (sample data, not your history), and run the self-checks:
+Debug builds can also render the cards and the drawer to PNGs without showing anything on screen (sample data, not your history), and run the self-checks. The screenshots in `docs/images` come from these:
 
 ```bash
 swift build
 .build/debug/CopyPasta --render-cards cards.png
 .build/debug/CopyPasta --render-panel panel.png
+.build/debug/CopyPasta --render-recordings recordings.png   # + recordings-states.png
+.build/debug/CopyPasta --render-tricks tricks.png           # + tricks-island.png (dictation), tricks-inline.png
 .build/debug/CopyPasta --render-settings settings.png --pane Dictation --tall   # sample values, not yours
 .build/debug/CopyPasta --check-migration     # Pastey → CopyPasta move, on throwaway folders
 .build/debug/CopyPasta --check-copy-tricks   # language detection, whitespace handling

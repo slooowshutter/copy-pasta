@@ -592,7 +592,9 @@ final class PanelController: NSObject, NSWindowDelegate {
                 newTextItem()
                 state.editText = text
             case .retry, .send:
-                hide { app.dictation.sendRecording(card.id) }   // pastes into the app you were in
+                // In the card, panel open: it shows the progress, then the transcript to paste.
+                if !app.dictation.retryInPanel(card.id) { NSSound.beep() }
+                refreshRecordings()
             case .addKey:
                 app.openSettings(pane: "API Keys")
                 hide()

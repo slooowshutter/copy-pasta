@@ -1,54 +1,77 @@
 import Carbon.HIToolbox
 
-/// Global hotkey via Carbon — ~40 lines, no dependency, works on every macOS.
-/// One hotkey supported; generalize if we ever need a second.
+/// CopyPasta's global hotkeys (Activate CopyPasta, dictation) via Carbon: no dependency,
+/// works on every macOS. One event handler, installed with the first hotkey, hands each
+/// press to its hotkey by id.
 final class HotKey {
+    /// While Settings records a shortcut, every hotkey is unregistered so its keys reach the
+    /// recorder (a registered combo never arrives as a key press), then registered again.
+    static var isPaused = false {
+        didSet { if isPaused != oldValue { all.forEach { $0.apply() } } }
+    }
+
+    // ponytail: hotkeys live as long as the app, so they're kept here and never removed.
+    private static var all: [HotKey] = []
+    private static let signature = OSType(0x50535459) // "PSTY"
+
+    private let id: UInt32
+    private let action: () -> Void
     private var ref: EventHotKeyRef?
-    private static var handler: (() -> Void)?
+    private var shortcut: Shortcut?
+    private var lastPress = Date.distantPast
 
-    /// False when another app (Paste, Maccy…) already holds the combo.
-    private(set) var isRegistered = false
+    init(action: @escaping () -> Void) {
+        if Self.all.isEmpty { Self.installHandler() }
+        id = UInt32(Self.all.count)
+        self.action = action
+        Self.all.append(self)
+    }
 
-    /// "PSTY". Dictation's ⌥⇧⌘Space (HotkeyService) is "SSHK": each handler only takes its own.
-    private static let signature = OSType(0x50535459)
+    /// Registers `shortcut` in place of the previous one; false if another app holds it.
+    @discardableResult
+    func register(_ shortcut: Shortcut) -> Bool {
+        self.shortcut = shortcut
+        return apply()
+    }
 
-    init(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) {
-        HotKey.handler = action
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        // Installed once; re-binding only re-runs Unregister/Register in update().
+    @discardableResult
+    private func apply() -> Bool {
+        if let ref { UnregisterEventHotKey(ref); self.ref = nil }
+        guard let shortcut, !Self.isPaused else { return true }
+        // Exclusive: without it, registering a combo another app holds "succeeds" and the
+        // shortcut just never fires. This way we fail loudly and can tell the user.
+        var newRef: EventHotKeyRef?
+        let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers,
+                                         EventHotKeyID(signature: Self.signature, id: id),
+                                         GetApplicationEventTarget(), OptionBits(kEventHotKeyExclusive), &newRef)
+        guard status == noErr else {
+            plog("hotkey \(shortcut.glyphs) registration failed (\(status))")
+            return false
+        }
+        ref = newRef
+        return true
+    }
+
+    /// One press can arrive twice: the second, within 0.15s, is ignored.
+    private func fire() {
+        guard Date().timeIntervalSince(lastPress) > 0.15 else { return }
+        lastPress = Date()
+        action()
+    }
+
+    private static func installHandler() {
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                      eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
             var id = EventHotKeyID()
             let status = GetEventParameter(event, EventParamName(kEventParamDirectObject),
                                            EventParamType(typeEventHotKeyID), nil,
                                            MemoryLayout<EventHotKeyID>.size, nil, &id)
-            guard status == noErr, id.signature == HotKey.signature else {
-                return OSStatus(eventNotHandledErr) // another hotkey: let its handler have it
+            guard status == noErr, id.signature == HotKey.signature, Int(id.id) < HotKey.all.count else {
+                return OSStatus(eventNotHandledErr)
             }
-            HotKey.handler?()
+            HotKey.all[Int(id.id)].fire()
             return noErr
         }, 1, &eventType, nil, nil)
-        update(keyCode: keyCode, modifiers: modifiers)
-    }
-
-    /// Swap the registered combo in place (keep the same instance, so the one-time
-    /// event handler isn't reinstalled and the static handler stays valid).
-    @discardableResult
-    func update(keyCode: UInt32, modifiers: UInt32) -> Bool {
-        if let ref { UnregisterEventHotKey(ref); self.ref = nil }
-        let id = EventHotKeyID(signature: HotKey.signature, id: 1)
-        // Exclusive: without it, registering a combo another app holds "succeeds" and
-        // the shortcut just never fires. This way we fail loudly and can tell the user.
-        let status = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(),
-                                         OptionBits(kEventHotKeyExclusive), &ref)
-        isRegistered = status == noErr
-        if !isRegistered { plog("hotkey registration failed (\(status))") }
-        return isRegistered
-    }
-
-    deinit {
-        if let ref { UnregisterEventHotKey(ref) }
     }
 }

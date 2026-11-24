@@ -166,7 +166,7 @@ struct DrawerView: View {
 
     private var emptyMessage: String {
         if !state.query.isEmpty { return "No matches" }
-        if state.showingRecordings { return "No recordings yet. Press \(HotkeyService.glyphs) to dictate." }
+        if state.showingRecordings { return "No recordings yet. Press \(AppSettings.shared.shortcut(.dictation).glyphs) to dictate." }
         return state.currentBoardID == nil
             ? "Copy something to get started"
             : "Drag a card onto this tab, or right-click it › Pin to"

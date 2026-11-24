@@ -221,7 +221,7 @@ struct RecordingCardView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            footer { Text("\(HotkeyService.glyphs) to stop") }
+            footer { Text("\(AppSettings.shared.shortcut(.dictation).glyphs) to stop") }
         }
     }
 

@@ -52,6 +52,31 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertTrue(capture.isRecording)
         XCTAssertEqual(try store.pendingSessions().count, 3)
     }
+
+    /// A card's Retry runs in the panel: when it fails, the card says why. No Island error.
+    func testRetryInPanelFailsInTheCardNotTheIsland() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let fixture = TestSettings()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            fixture.tearDown()
+        }
+        let settings = fixture.makeStore()
+        settings.openRouterAPIKey = "" // fails before anything is sent
+        let store = RecordingStore(rootDirectory: root)
+        let failed = try store.createSession()
+        try Data([1, 2, 3]).write(to: try store.beginChunk(in: failed.id))
+        try store.finishCurrentChunk(in: failed.id, duration: 1)
+        try store.markFailed(failed.id, message: "The transcription service returned no text.")
+        let controller = DictationController(
+            settings: settings, recordingStore: store,
+            historyStore: TranscriptHistoryStore(rootDirectory: root))
+
+        XCTAssertTrue(controller.retryInPanel(failed.id))
+        XCTAssertEqual(controller.liveState.phase, .idle)
+        XCTAssertEqual(try store.load(failed.id).status, .failed)
+        XCTAssertEqual(try store.load(failed.id).lastError, OpenRouterServiceError.missingAPIKey.localizedDescription)
+    }
 }
 
 private final class RecoveryTestRecorder: AudioRecording {
